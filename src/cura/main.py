@@ -66,7 +66,11 @@ class CuraOrchestrator:
 
     def __init__(self) -> None:
         """Initialise hardware interfaces, server, and threading primitives."""
-        self._arm = ArmController(can_port=settings.can_port, speed=settings.arm_speed)
+        self._arm = ArmController(
+            can_port=settings.can_port,
+            speed=settings.arm_speed,
+            bustype=settings.can_bustype,
+        )
         self._server = CuraServer()
         self._waypoints = load_waypoints(settings.waypoints_file)
         self._state = SystemState.IDLE

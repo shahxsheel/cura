@@ -2,8 +2,6 @@ import logging
 import threading
 import time
 
-from piper_sdk import C_PiperInterface
-
 from cura.arm.safety import SafetyModule
 from cura.arm.trajectories import JointConfig, WAYPOINTS
 
@@ -21,19 +19,23 @@ class ArmController:
     and an emergency stop mechanism.
     """
 
-    def __init__(self, can_port: str = "can0", speed: int = 50) -> None:
+    def __init__(self, can_port: str = "can0", speed: int = 50, bustype: str = "auto") -> None:
         """
         Parameters
         ----------
         can_port:
-            CAN bus device name (e.g. "can0").
+            CAN bus device name (e.g. "can0" on Linux, "/dev/cu.usbmodemXXX" on macOS).
         speed:
             Motion speed passed to MotionCtrl_2, 0-100.
+        bustype:
+            CAN bus type: "auto" detects the OS ("socketcan" on Linux, "slcan" on macOS).
+            Explicit values "socketcan" or "slcan" override auto-detection.
         """
         self._can_port = can_port
         self._speed = speed
+        self._bustype = bustype
         self._safety = SafetyModule()
-        self._piper: C_PiperInterface | None = None
+        self._piper: object | None = None
         self._stop_event = threading.Event()
         self._movement_thread: threading.Thread | None = None
         self._connected = False
@@ -45,22 +47,50 @@ class ArmController:
     def connect(self) -> bool:
         """Initialise and enable the arm over CAN.
 
+        Supports both Linux (SocketCAN, auto-init) and macOS (SLCAN via serial
+        port). The bus type is resolved from ``self._bustype``: when set to
+        "auto" the OS is detected at runtime — "slcan" on Darwin, "socketcan"
+        elsewhere. Explicit values "socketcan" or "slcan" bypass detection.
+
         Returns True on success, False if an exception occurs.
         """
         try:
-            self._piper = C_PiperInterface(
-                can_name=self._can_port,
-                judge_flag=False,
-                can_auto_init=True,
-            )
+            import platform as _platform
+            from piper_sdk import C_PiperInterface
+
+            bustype = self._bustype
+            if bustype == "auto":
+                bustype = "slcan" if _platform.system() == "Darwin" else "socketcan"
+
+            if bustype == "slcan":
+                # macOS: manual CAN bus init via serial port
+                self._piper = C_PiperInterface(
+                    can_name=self._can_port,
+                    judge_flag=False,
+                    can_auto_init=False,
+                )
+                self._piper.CreateCanBus(
+                    can_name=self._can_port,
+                    bustype="slcan",
+                    expected_bitrate=1000000,
+                    judge_flag=False,
+                )
+            else:
+                # Linux: SocketCAN auto-init
+                self._piper = C_PiperInterface(
+                    can_name=self._can_port,
+                    judge_flag=False,
+                    can_auto_init=True,
+                )
+
             self._piper.ConnectPort()
             self._piper.EnableArm(7)
             self._piper.MotionCtrl_2(0x01, 0x01, self._speed)
             self._connected = True
-            logger.info("Arm connected on %s at speed %d", self._can_port, self._speed)
+            logger.info("Connected to Piper arm on %s (bustype=%s)", self._can_port, bustype)
             return True
-        except Exception:
-            logger.exception("Failed to connect to arm on %s", self._can_port)
+        except Exception as e:
+            logger.error("Failed to connect to arm: %s", e)
             self._connected = False
             return False
 

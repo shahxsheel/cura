@@ -24,7 +24,11 @@ class Settings:
 
     # Hardware
     can_port: str = "can0"
-    """CAN bus interface name (e.g. 'can0')."""
+    """CAN bus interface name (e.g. 'can0' on Linux, '/dev/cu.usbmodemXXX' on macOS)."""
+
+    can_bustype: str = "auto"
+    """CAN bus type: 'auto' detects the OS ('socketcan' on Linux, 'slcan' on macOS).
+    Override with CURA_CAN_BUSTYPE=socketcan or CURA_CAN_BUSTYPE=slcan."""
 
     arm_speed: int = 50
     """Arm movement speed in piper_sdk units (0–100)."""
@@ -126,6 +130,9 @@ def load_settings() -> Settings:
     return Settings(
         can_port=str(
             os.environ.get("CURA_CAN_PORT", defaults.can_port)
+        ),
+        can_bustype=str(
+            os.environ.get("CURA_CAN_BUSTYPE", defaults.can_bustype)
         ),
         arm_speed=int(
             _get("CURA_ARM_SPEED", defaults.arm_speed, int)
