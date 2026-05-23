@@ -5,9 +5,10 @@ description = "AI-powered robotic feeding assistant for hospital patients"
 requires-python = ">=3.11"
 dependencies = [
     "piper-sdk",
-    "python-can>=3.3.4",
+    "python-can[gs-usb]>=3.3.4",
+    "pyserial",
     "opencv-python",
-    "pyorbbecsdk2",
+    "pyorbbecsdk2; sys_platform == 'linux'",
     "mediapipe",
     "ultralytics",
     "fastapi",
@@ -15,6 +16,7 @@ dependencies = [
     "pydantic>=2.0",
     "numpy",
     "python-multipart",
+    "gs-usb>=0.3.1",
 ]
 
 [project.scripts]

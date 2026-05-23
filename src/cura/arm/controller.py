@@ -24,12 +24,15 @@ class ArmController:
         Parameters
         ----------
         can_port:
-            CAN bus device name (e.g. "can0" on Linux, "/dev/cu.usbmodemXXX" on macOS).
+            CAN bus device name. Used for socketcan ("can0" on Linux) and slcan
+            ("/dev/cu.usbmodemXXX" on macOS). Not used for gs_usb — that always
+            uses channel "0" via libusb.
         speed:
             Motion speed passed to MotionCtrl_2, 0-100.
         bustype:
-            CAN bus type: "auto" detects the OS ("socketcan" on Linux, "slcan" on macOS).
-            Explicit values "socketcan" or "slcan" override auto-detection.
+            CAN bus type: "auto" detects the OS ("gs_usb" on Darwin for the
+            candleLight adapter, "socketcan" on Linux). Explicit values
+            "socketcan", "gs_usb", or "slcan" override auto-detection.
         """
         self._can_port = can_port
         self._speed = speed
@@ -47,10 +50,11 @@ class ArmController:
     def connect(self) -> bool:
         """Initialise and enable the arm over CAN.
 
-        Supports both Linux (SocketCAN, auto-init) and macOS (SLCAN via serial
-        port). The bus type is resolved from ``self._bustype``: when set to
-        "auto" the OS is detected at runtime — "slcan" on Darwin, "socketcan"
-        elsewhere. Explicit values "socketcan" or "slcan" bypass detection.
+        Supports Linux (SocketCAN, auto-init) and macOS (gs_usb via candleLight
+        USB-to-CAN adapter, or slcan via serial port). The bus type is resolved
+        from ``self._bustype``: when set to "auto" the OS is detected at runtime
+        — "gs_usb" on Darwin, "socketcan" elsewhere. Explicit values
+        "socketcan", "gs_usb", or "slcan" bypass detection.
 
         Returns True on success, False if an exception occurs.
         """
@@ -60,18 +64,19 @@ class ArmController:
 
             bustype = self._bustype
             if bustype == "auto":
-                bustype = "slcan" if _platform.system() == "Darwin" else "socketcan"
+                bustype = "gs_usb" if _platform.system() == "Darwin" else "socketcan"
 
-            if bustype == "slcan":
-                # macOS: manual CAN bus init via serial port
+            if bustype in ("gs_usb", "slcan"):
+                # macOS: manual CAN bus init (gs_usb for candleLight, slcan for serial adapters)
                 self._piper = C_PiperInterface(
                     can_name=self._can_port,
                     judge_flag=False,
                     can_auto_init=False,
                 )
+                can_name = "0" if bustype == "gs_usb" else self._can_port
                 self._piper.CreateCanBus(
-                    can_name=self._can_port,
-                    bustype="slcan",
+                    can_name=can_name,
+                    bustype=bustype,
                     expected_bitrate=1000000,
                     judge_flag=False,
                 )
@@ -87,7 +92,7 @@ class ArmController:
             self._piper.EnableArm(7)
             self._piper.MotionCtrl_2(0x01, 0x01, self._speed)
             self._connected = True
-            logger.info("Connected to Piper arm on %s (bustype=%s)", self._can_port, bustype)
+            logger.info("Connected to Piper arm (bustype=%s)", bustype)
             return True
         except Exception as e:
             logger.error("Failed to connect to arm: %s", e)

@@ -24,11 +24,19 @@ class Settings:
 
     # Hardware
     can_port: str = "can0"
-    """CAN bus interface name (e.g. 'can0' on Linux, '/dev/cu.usbmodemXXX' on macOS)."""
+    """CAN bus interface name.
+
+    Used by the socketcan bustype (Linux default, e.g. 'can0') and the slcan
+    bustype (serial-port SLCAN adapters, e.g. '/dev/cu.usbmodemXXX' on macOS).
+    Not used for gs_usb — the candleLight USB-to-CAN adapter is always addressed
+    as channel '0' via libusb regardless of this value.
+    """
 
     can_bustype: str = "auto"
-    """CAN bus type: 'auto' detects the OS ('socketcan' on Linux, 'slcan' on macOS).
-    Override with CURA_CAN_BUSTYPE=socketcan or CURA_CAN_BUSTYPE=slcan."""
+    """CAN bus type: 'auto' detects the OS ('gs_usb' on macOS for the
+    candleLight/bytewerk adapter, 'socketcan' on Linux).
+    Override with CURA_CAN_BUSTYPE=socketcan, CURA_CAN_BUSTYPE=gs_usb, or
+    CURA_CAN_BUSTYPE=slcan."""
 
     arm_speed: int = 50
     """Arm movement speed in piper_sdk units (0–100)."""
