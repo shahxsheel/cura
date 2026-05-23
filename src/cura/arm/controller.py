@@ -69,18 +69,20 @@ class ArmController:
             if bustype in ("gs_usb", "slcan"):
                 # macOS: manual CAN bus init (gs_usb for candleLight, slcan for serial adapters)
                 if bustype == "gs_usb":
-                    # Reset the USB device before connecting — clears stale state left
-                    # by a previous run's segfault, which otherwise makes the second
-                    # connection attempt fail with SEND_MESSAGE_FAILED.
+                    # Send a CAN-level STOP to the candleLight before re-initialising.
+                    # This resets the adapter's CAN controller without touching the USB
+                    # device — dev.reset() times out on macOS and makes things worse.
                     try:
-                        import usb.core as _usb
-                        dev = _usb.find(idVendor=0x1D50, idProduct=0x606F)
-                        if dev:
-                            dev.reset()
-                            time.sleep(0.5)
-                            logger.info("candleLight USB device reset")
+                        from gs_usb.gs_usb import GsUsb as _GsUsb
+                        for _dev in _GsUsb.scan():
+                            try:
+                                _dev.stop()
+                            except Exception:
+                                pass
+                        time.sleep(0.3)
+                        logger.info("candleLight CAN controller stopped (clean state)")
                     except Exception as _e:
-                        logger.debug("USB reset skipped: %s", _e)
+                        logger.debug("gs_usb pre-stop skipped: %s", _e)
 
                 self._piper = C_PiperInterface(
                     can_name=self._can_port,

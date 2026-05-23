@@ -26,13 +26,14 @@ read -r
 
 sudo .venv/bin/python - "$WAYPOINT" <<'PYEOF'
 import sys, os, time
-import usb.core
 
-# Reset candleLight USB device to clear stale state from any previous run
-dev = usb.core.find(idVendor=0x1D50, idProduct=0x606F)
-if dev:
-    dev.reset()
-    time.sleep(0.5)
+# CAN-level stop before connecting — resets adapter state without USB reset
+# (dev.reset() times out on macOS and makes things worse)
+from gs_usb.gs_usb import GsUsb
+for _dev in GsUsb.scan():
+    try: _dev.stop()
+    except Exception: pass
+time.sleep(0.3)
 
 from piper_sdk import C_PiperInterface
 from cura.arm.trajectories import teach_and_save
@@ -44,5 +45,11 @@ p.ConnectPort()
 time.sleep(1.5)
 teach_and_save(p, waypoint, "waypoints.json")
 print(f"✅  Waypoint '{waypoint}' saved to waypoints.json")
-os._exit(0)  # skip GC teardown that causes segfault with gs_usb threads
+
+# Stop CAN controller cleanly before exit to prevent stale state on next run
+for _dev in GsUsb.scan():
+    try: _dev.stop()
+    except Exception: pass
+time.sleep(0.2)
+os._exit(0)
 PYEOF
