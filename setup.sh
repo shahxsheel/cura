@@ -41,8 +41,8 @@ echo "✅  Dependencies installed"
 echo ""
 echo "🔍  Checking hardware..."
 
-# Check for CAN adapter
-if system_profiler SPUSBDataType 2>/dev/null | grep -q "candleLight"; then
+# Check for CAN adapter (candleLight VID=0x1D50 PID=0x606F)
+if ioreg -r -c IOUSBHostDevice -l 2>/dev/null | grep -q "candleLight"; then
     echo "✅  CAN adapter (candleLight) detected"
     CAN_OK=true
 else
@@ -50,8 +50,8 @@ else
     CAN_OK=false
 fi
 
-# Check for Orbbec camera
-if system_profiler SPUSBDataType 2>/dev/null | grep -q -i "orbbec\|ORBBEC"; then
+# Check for Orbbec camera (VID=0x2BC5)
+if ioreg -r -c IOUSBHostDevice -l 2>/dev/null | grep -qi "orbbec\|Dabai"; then
     echo "✅  Orbbec depth camera detected"
     CAM_OK=true
 else
