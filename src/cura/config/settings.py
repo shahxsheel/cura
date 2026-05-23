@@ -39,6 +39,27 @@ class Settings:
     detection_confidence: float = 0.5
     """YOLO object-detection confidence threshold (0.0–1.0)."""
 
+    depth_min_mm: float = 50.0
+    """Ignore depth readings closer than this value (mm)."""
+
+    depth_max_mm: float = 3000.0
+    """Ignore depth readings farther than this value (mm)."""
+
+    orbbec_color_width: int = 640
+    """Width of the Orbbec color stream in pixels."""
+
+    orbbec_color_height: int = 480
+    """Height of the Orbbec color stream in pixels."""
+
+    orbbec_depth_width: int = 640
+    """Width of the Orbbec depth stream in pixels."""
+
+    orbbec_depth_height: int = 480
+    """Height of the Orbbec depth stream in pixels."""
+
+    orbbec_fps: int = 30
+    """Target frame rate for both Orbbec color and depth streams."""
+
     # Files
     waypoints_file: Path = field(default_factory=lambda: Path("waypoints.json"))
     """Path to the JSON file containing taught waypoints."""
@@ -117,6 +138,27 @@ def load_settings() -> Settings:
         ),
         detection_confidence=float(
             _get("CURA_DETECTION_CONFIDENCE", defaults.detection_confidence, float)
+        ),
+        depth_min_mm=float(
+            _get("CURA_DEPTH_MIN_MM", defaults.depth_min_mm, float)
+        ),
+        depth_max_mm=float(
+            _get("CURA_DEPTH_MAX_MM", defaults.depth_max_mm, float)
+        ),
+        orbbec_color_width=int(
+            _get("CURA_ORBBEC_COLOR_WIDTH", defaults.orbbec_color_width, int)
+        ),
+        orbbec_color_height=int(
+            _get("CURA_ORBBEC_COLOR_HEIGHT", defaults.orbbec_color_height, int)
+        ),
+        orbbec_depth_width=int(
+            _get("CURA_ORBBEC_DEPTH_WIDTH", defaults.orbbec_depth_width, int)
+        ),
+        orbbec_depth_height=int(
+            _get("CURA_ORBBEC_DEPTH_HEIGHT", defaults.orbbec_depth_height, int)
+        ),
+        orbbec_fps=int(
+            _get("CURA_ORBBEC_FPS", defaults.orbbec_fps, int)
         ),
         waypoints_file=Path(
             os.environ.get("CURA_WAYPOINTS_FILE", str(defaults.waypoints_file))

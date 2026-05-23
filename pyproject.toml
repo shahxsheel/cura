@@ -7,6 +7,7 @@ dependencies = [
     "piper-sdk",
     "python-can>=3.3.4",
     "opencv-python",
+    "pyorbbecsdk2",
     "mediapipe",
     "ultralytics",
     "fastapi",
