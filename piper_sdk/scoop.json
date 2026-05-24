@@ -1,0 +1,149 @@
+{
+  "name": "pickup",
+  "created": "2026-05-23T22:21:22.606026",
+  "waypoints": [
+    {
+      "label": "home",
+      "joints": [
+        1335,
+        12087,
+        1922,
+        53009,
+        -1066,
+        -58742
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "rotate",
+      "joints": [
+        -2659,
+        11972,
+        1827,
+        6075,
+        0,
+        84847
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover",
+      "joints": [
+        -6171,
+        64838,
+        -67016,
+        -3541,
+        67660,
+        86316
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "scoop",
+      "joints": [
+        -6171,
+        85565,
+        -41000,
+        -971,
+        11760,
+        86316
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "scooped",
+      "joints": [
+        -6171,
+        85306,
+        -58897,
+        4138,
+        -14649,
+        86316
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "keep",
+      "joints": [
+        -59965,
+        69399,
+        -115157,
+        1060,
+        37247,
+        88886
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "eat",
+      "joints": [
+        -59965,
+        104403,
+        -157238,
+        -1404,
+        27468,
+        88887
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "ea",
+      "joints": [
+        -59965,
+        68474,
+        -157449,
+        -2523,
+        75693,
+        88887
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "back",
+      "joints": [
+        685,
+        -1848,
+        1783,
+        492,
+        20037,
+        95586
+      ],
+      "gripper_angle": 95700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "roate",
+      "joints": [
+        685,
+        -1848,
+        1783,
+        -2034,
+        20340,
+        2684
+      ],
+      "gripper_angle": 96100,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "back",
+      "joints": [
+        685,
+        -1848,
+        1783,
+        -1641,
+        20237,
+        2732
+      ],
+      "gripper_angle": 14600,
+      "gripper_effort": 1000
+    }
+  ]
+}

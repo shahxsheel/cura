@@ -2,12 +2,15 @@
 """
 pi_arm_server.py — Cura arm control server (runs on Raspberry Pi)
 
+Uses pyAgxArm SDK (move_p for Cartesian control, units: meters + radians).
+
 Two TCP connections to Mac (Mac is the server on both):
   - port 9998: Pi streams live arm position to Mac (used during calibration)
   - port 9999: Pi receives move commands from Mac (used during tracking)
 
 Usage:
     python3 pi_arm_server.py
+    python3 pi_arm_server.py --calibrate   # position stream only
 """
 import json
 import socket
@@ -16,8 +19,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, "piper_sdk")
-from piper_sdk import *
+from pyAgxArm import create_agx_arm_config, AgxArmFactory, ArmModel, PiperFW
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -29,52 +31,48 @@ CAN_PORT = "can_piper"
 ARM_SPEED = 20        # percent, 0-100
 POSITION_STREAM_HZ = 10
 
+# Delivery orientation: keep whatever the arm's current orientation is.
+# Set on first move_p call by reading get_flange_pose().
+_delivery_orientation = None  # [roll, pitch, yaw] in radians
+
 
 # ---------------------------------------------------------------------------
 # Arm control
 # ---------------------------------------------------------------------------
 
-# Firmware requires continuous command streaming at ~100Hz to move.
-# _target holds the current target; the streamer thread sends it continuously.
-_target = None
-_target_lock = threading.Lock()
+def move_arm(robot, cmd):
+    """Parse incoming JSON command (units: 0.001 mm) and call move_p once."""
+    global _delivery_orientation
+    x_m = int(cmd["x"]) / 1e6   # 0.001mm -> m
+    y_m = int(cmd["y"]) / 1e6
+    z_m = int(cmd["z"]) / 1e6
 
-def _arm_streamer(piper):
-    """Background thread: streams current target to arm at 100Hz (firmware requirement)."""
-    while True:
-        with _target_lock:
-            tgt = _target
-        if tgt is not None:
-            x, y, z, rx, ry, rz = tgt
-            piper.MotionCtrl_2(0x01, 0x00, ARM_SPEED, 0x00)
-            piper.EndPoseCtrl(x, y, z, rx, ry, rz)
-        time.sleep(0.01)  # 100 Hz
-
-def move_arm(piper, cmd):
-    global _target
-    x = int(cmd["x"])
-    y = int(cmd["y"])
-    z = int(cmd["z"])
-    rx = int(cmd.get("rx", 0))
-    ry = int(cmd.get("ry", 85000))
-    rz = int(cmd.get("rz", 0))
-
-    if not (-600000 <= x <= 600000 and
-            -600000 <= y <= 600000 and
-            0 <= z <= 700000):
-        print(f"SAFETY REJECT: out of range x={x} y={y} z={z}")
+    if not (-0.6 <= x_m <= 0.6 and -0.6 <= y_m <= 0.6 and 0 <= z_m <= 0.7):
+        print(f"SAFETY REJECT: out of range x={x_m:.3f} y={y_m:.3f} z={z_m:.3f}")
         return
 
-    with _target_lock:
-        _target = (x, y, z, rx, ry, rz)
-    print(f"→ ARM MOVE: X={x//1000}mm Y={y//1000}mm Z={z//1000}mm")
+    # Lock in orientation from the arm's current pose on first command
+    if _delivery_orientation is None:
+        fp = robot.get_flange_pose()
+        if fp is not None:
+            _delivery_orientation = fp.msg[3:6]  # [roll, pitch, yaw]
+            print(f"Locked delivery orientation: roll={_delivery_orientation[0]:.3f} pitch={_delivery_orientation[1]:.3f} yaw={_delivery_orientation[2]:.3f}")
+        else:
+            _delivery_orientation = [0.0, 1.484, 0.0]  # fallback: ~85 deg pitch
+
+    roll, pitch, yaw = _delivery_orientation
+    try:
+        robot.move_p([x_m, y_m, z_m, roll, pitch, yaw])
+        print(f"→ ARM MOVE: X={x_m*1000:.1f}mm Y={y_m*1000:.1f}mm Z={z_m*1000:.1f}mm")
+    except Exception as e:
+        print(f"move_p error: {type(e).__name__}: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Position streaming thread
 # ---------------------------------------------------------------------------
 
-def stream_position(piper, mac_host):
+def stream_position(robot, mac_host):
     """Continuously connect to Mac's ARM_POS_PORT and stream live arm position."""
     while True:
         try:
@@ -84,9 +82,12 @@ def stream_position(piper, mac_host):
             print("Position stream connected.")
             while True:
                 try:
-                    pose = piper.GetArmEndPoseMsgs().end_pose
-                    pos = {"x": pose.X_axis, "y": pose.Y_axis, "z": pose.Z_axis}
-                    sock.sendall((json.dumps(pos) + "\n").encode())
+                    fp = robot.get_flange_pose()
+                    if fp is not None:
+                        x_m, y_m, z_m = fp.msg[0], fp.msg[1], fp.msg[2]
+                        # Send in 0.001mm units to match mac_vision.py expectations
+                        pos = {"x": int(x_m * 1e6), "y": int(y_m * 1e6), "z": int(z_m * 1e6)}
+                        sock.sendall((json.dumps(pos) + "\n").encode())
                 except OSError:
                     break
                 time.sleep(1.0 / POSITION_STREAM_HZ)
@@ -104,7 +105,7 @@ def stream_position(piper, mac_host):
 # Command receive loop
 # ---------------------------------------------------------------------------
 
-def receive_commands(piper, mac_host):
+def receive_commands(robot, mac_host):
     """Continuously connect to Mac's CMD_PORT and execute move commands."""
     while True:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -125,7 +126,7 @@ def receive_commands(piper, mac_host):
                         continue
                     try:
                         cmd = json.loads(line)
-                        move_arm(piper, cmd)
+                        move_arm(robot, cmd)
                     except json.JSONDecodeError as e:
                         print(f"JSON parse error: {e}")
         except (ConnectionRefusedError, OSError) as e:
@@ -156,36 +157,39 @@ def main():
     )
     time.sleep(1.0)
 
-    # Connect and enable arm
-    print("Connecting to arm...")
-    piper = C_PiperInterface_V2(CAN_PORT)
-    piper.ConnectPort()
-    time.sleep(0.1)
+    # Connect with pyAgxArm
+    print("Connecting to arm via pyAgxArm...")
+    cfg = create_agx_arm_config(
+        robot=ArmModel.PIPER,
+        firmeware_version=PiperFW.DEFAULT,
+        interface="socketcan",
+        channel=CAN_PORT,
+    )
+    robot = AgxArmFactory.create_arm(cfg)
+    robot.connect()
+    time.sleep(1.0)
 
     print("Enabling arm...")
-    while not piper.EnablePiper():
+    while not robot.enable():
         time.sleep(0.01)
     print("Arm enabled.")
 
+    robot.set_speed_percent(ARM_SPEED)
+
     try:
         if args.calibrate:
-            # Calibration mode: only stream position to Mac, no command receiving
             print("Calibration mode: streaming arm position to Mac...")
-            stream_position(piper, MAC_HOST)  # runs forever until Ctrl+C
+            stream_position(robot, MAC_HOST)
         else:
-            # Tracking mode: stream position in background + receive commands in foreground
             pos_thread = threading.Thread(
-                target=stream_position, args=(piper, MAC_HOST), daemon=True
+                target=stream_position, args=(robot, MAC_HOST), daemon=True
             )
             pos_thread.start()
-            streamer_thread = threading.Thread(target=_arm_streamer, args=(piper,), daemon=True)
-            streamer_thread.start()
-            receive_commands(piper, MAC_HOST)
+            receive_commands(robot, MAC_HOST)
     except KeyboardInterrupt:
         print("\nEmergency stop!")
-        piper.MotionCtrl_1(0x01, 0x00, 0x00)
+        robot.electronic_emergency_stop()
         time.sleep(0.5)
-        piper.MotionCtrl_1(0x02, 0x00, 0x00)
         print("Done.")
 
 

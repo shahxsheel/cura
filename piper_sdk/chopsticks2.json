@@ -1,0 +1,136 @@
+{
+  "name": "pickup",
+  "created": "2026-05-23T22:16:12.276220",
+  "waypoints": [
+    {
+      "label": "home",
+      "joints": [
+        2180,
+        -1802,
+        1770,
+        -597,
+        21648,
+        6317
+      ],
+      "gripper_angle": 11900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover",
+      "joints": [
+        2064,
+        68004,
+        -50880,
+        -7970,
+        -2099,
+        6317
+      ],
+      "gripper_angle": 99900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover2",
+      "joints": [
+        4097,
+        116593,
+        -98062,
+        -4993,
+        70692,
+        -709
+      ],
+      "gripper_angle": 99900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "sqeeze",
+      "joints": [
+        3983,
+        116698,
+        -98062,
+        -6062,
+        71200,
+        4583
+      ],
+      "gripper_angle": 10400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover3",
+      "joints": [
+        3983,
+        52162,
+        -112719,
+        -6062,
+        74124,
+        4583
+      ],
+      "gripper_angle": 10400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "eat",
+      "joints": [
+        -48540,
+        101302,
+        -128461,
+        -82520,
+        33165,
+        62342
+      ],
+      "gripper_angle": 10400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "release",
+      "joints": [
+        -48540,
+        101195,
+        -128461,
+        -82520,
+        33165,
+        62342
+      ],
+      "gripper_angle": 64900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hoevr2",
+      "joints": [
+        -1389,
+        24048,
+        -78191,
+        -913,
+        55937,
+        443
+      ],
+      "gripper_angle": 64900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "finish",
+      "joints": [
+        221,
+        -1746,
+        1937,
+        -430,
+        21217,
+        443
+      ],
+      "gripper_angle": 64900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "sqeeze",
+      "joints": [
+        221,
+        -1746,
+        1832,
+        -430,
+        21285,
+        443
+      ],
+      "gripper_angle": 11700,
+      "gripper_effort": 1000
+    }
+  ]
+}

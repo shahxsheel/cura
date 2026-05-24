@@ -1,0 +1,110 @@
+{
+  "name": "pickup",
+  "created": "2026-05-23T22:07:32.826921",
+  "waypoints": [
+    {
+      "label": "home",
+      "joints": [
+        1257,
+        -1727,
+        1772,
+        -1203,
+        21847,
+        1279
+      ],
+      "gripper_angle": 45500,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "grab_stick",
+      "joints": [
+        1257,
+        -1727,
+        1772,
+        -696,
+        21265,
+        1135
+      ],
+      "gripper_angle": 45800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "next",
+      "joints": [
+        1866,
+        82446,
+        -25392,
+        10461,
+        -15033,
+        -2612
+      ],
+      "gripper_angle": 44700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "next2",
+      "joints": [
+        1866,
+        89670,
+        -25392,
+        10724,
+        -19652,
+        -1986
+      ],
+      "gripper_angle": 42800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover",
+      "joints": [
+        170,
+        64690,
+        -70025,
+        4402,
+        5369,
+        -1079
+      ],
+      "gripper_angle": 44100,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "put",
+      "joints": [
+        -46158,
+        111699,
+        -56295,
+        13794,
+        -20735,
+        -16869
+      ],
+      "gripper_angle": 43600,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "release",
+      "joints": [
+        -46158,
+        110812,
+        -56295,
+        11889,
+        -19585,
+        -13895
+      ],
+      "gripper_angle": 46300,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "back",
+      "joints": [
+        -3261,
+        -1667,
+        1845,
+        7327,
+        21454,
+        -13895
+      ],
+      "gripper_angle": 46300,
+      "gripper_effort": 1000
+    }
+  ]
+}
