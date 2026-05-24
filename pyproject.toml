@@ -1,0 +1,31 @@
+[project]
+name = "cura"
+version = "0.1.0"
+description = "AI-powered robotic feeding assistant for hospital patients"
+requires-python = ">=3.11"
+dependencies = [
+    "pyAgxArm @ git+https://github.com/agilexrobotics/pyAgxArm",
+    "python-can>=3.3.4",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "python-multipart",
+]
+
+[project.scripts]
+cura = "cura.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cura"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
