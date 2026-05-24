@@ -1,9 +1,15 @@
 import json
 import logging
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# pyAgxArm exposes joint angles in radians; JointConfig stores them in
+# 0.001-degree units (legacy piper_sdk convention, also matches the limits
+# enforced by SafetyModule.JOINT_LIMITS).
+_UNIT_PER_RAD: float = 180000.0 / math.pi  # radians -> 0.001-deg units
 
 
 @dataclass
@@ -123,18 +129,25 @@ def teach_and_save(piper: object, waypoint_name: str, path: str | Path) -> None:
     """Read the arm's current joint positions and store them as *waypoint_name*.
 
     The existing file at *path* is loaded first so that other waypoints are
-    preserved.
+    preserved. *piper* is a pyAgxArm Driver instance (connect() already
+    called). Joint angles are read in radians from pyAgxArm and converted
+    into JointConfig's 0.001-deg units.
     """
-    msgs = piper.GetArmJointMsgs()  # type: ignore[attr-defined]
-    joint_vals = msgs.joint_state.position  # list/tuple of 6 values in 0.001 deg
+    msg = piper.get_joint_angles()  # type: ignore[attr-defined]
+    if msg is None:
+        raise RuntimeError(
+            "pyAgxArm returned no joint angle feedback yet — "
+            "wait a moment after connect() and try again"
+        )
+    rads = msg.msg  # list[float] of length 6, radians
 
     config = JointConfig(
-        j1=float(joint_vals[0]),
-        j2=float(joint_vals[1]),
-        j3=float(joint_vals[2]),
-        j4=float(joint_vals[3]),
-        j5=float(joint_vals[4]),
-        j6=float(joint_vals[5]),
+        j1=float(rads[0]) * _UNIT_PER_RAD,
+        j2=float(rads[1]) * _UNIT_PER_RAD,
+        j3=float(rads[2]) * _UNIT_PER_RAD,
+        j4=float(rads[3]) * _UNIT_PER_RAD,
+        j5=float(rads[4]) * _UNIT_PER_RAD,
+        j6=float(rads[5]) * _UNIT_PER_RAD,
     )
 
     existing = load_waypoints(path)

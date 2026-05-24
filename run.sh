@@ -1,7 +1,8 @@
 #!/bin/bash
-# Cura run script — uses sudo on macOS for CAN USB access
+# Cura run script — Raspberry Pi / Linux only.
 
 set -e
+export PATH="$HOME/.local/bin:$PATH"
 cd "$(dirname "$0")"
 
 echo "🚀  Starting Cura..."
@@ -9,10 +10,7 @@ echo "    SPACE = Start feeding / Done drinking"
 echo "    ESC   = Emergency stop"
 echo ""
 
-if [[ "$(uname)" == "Darwin" ]]; then
-    # macOS: needs sudo for gs_usb CAN access
-    sudo .venv/bin/python -m cura.main "$@"
-else
-    # Linux: no sudo needed
-    uv run python -m cura.main "$@"
-fi
+sudo ip link set can0 type can bitrate 1000000 2>/dev/null || true
+sudo ip link set up can0 2>/dev/null || true
+
+uv run python -m cura.main "$@"

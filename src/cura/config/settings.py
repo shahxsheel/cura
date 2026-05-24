@@ -24,53 +24,10 @@ class Settings:
 
     # Hardware
     can_port: str = "can0"
-    """CAN bus interface name.
-
-    Used by the socketcan bustype (Linux default, e.g. 'can0') and the slcan
-    bustype (serial-port SLCAN adapters, e.g. '/dev/cu.usbmodemXXX' on macOS).
-    Not used for gs_usb — the candleLight USB-to-CAN adapter is always addressed
-    as channel '0' via libusb regardless of this value.
-    """
-
-    can_bustype: str = "auto"
-    """CAN bus type: 'auto' detects the OS ('gs_usb' on macOS for the
-    candleLight/bytewerk adapter, 'socketcan' on Linux).
-    Override with CURA_CAN_BUSTYPE=socketcan, CURA_CAN_BUSTYPE=gs_usb, or
-    CURA_CAN_BUSTYPE=slcan."""
+    """SocketCAN interface name (e.g. 'can0')."""
 
     arm_speed: int = 50
     """Arm movement speed in piper_sdk units (0–100)."""
-
-    arm_camera_index: int = 0
-    """USB camera index for the wrist/arm camera."""
-
-    patient_camera_url: str = ""
-    """MJPEG stream URL for the T5AI patient-facing camera. Empty = not configured."""
-
-    # Vision
-    detection_confidence: float = 0.5
-    """YOLO object-detection confidence threshold (0.0–1.0)."""
-
-    depth_min_mm: float = 50.0
-    """Ignore depth readings closer than this value (mm)."""
-
-    depth_max_mm: float = 3000.0
-    """Ignore depth readings farther than this value (mm)."""
-
-    orbbec_color_width: int = 640
-    """Width of the Orbbec color stream in pixels."""
-
-    orbbec_color_height: int = 480
-    """Height of the Orbbec color stream in pixels."""
-
-    orbbec_depth_width: int = 640
-    """Width of the Orbbec depth stream in pixels."""
-
-    orbbec_depth_height: int = 480
-    """Height of the Orbbec depth stream in pixels."""
-
-    orbbec_fps: int = 30
-    """Target frame rate for both Orbbec color and depth streams."""
 
     # Files
     waypoints_file: Path = field(default_factory=lambda: Path("waypoints.json"))
@@ -108,15 +65,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    """Read environment variables and return a populated :class:`Settings` instance.
-
-    Each field maps to a ``CURA_<UPPER_FIELD_NAME>`` environment variable.
-    Values are cast to the appropriate type; invalid values are logged and the
-    default is kept.
-
-    Returns:
-        A :class:`Settings` instance with any env-var overrides applied.
-    """
+    """Read environment variables and return a populated :class:`Settings` instance."""
     defaults = Settings()
 
     def _get(env_key: str, default: object, cast: type) -> object:
@@ -128,96 +77,34 @@ def load_settings() -> Settings:
         except (ValueError, TypeError) as exc:
             logger.warning(
                 "Invalid value for %s=%r (%s); using default %r",
-                env_key,
-                raw,
-                exc,
-                default,
+                env_key, raw, exc, default,
             )
             return default
 
     return Settings(
-        can_port=str(
-            os.environ.get("CURA_CAN_PORT", defaults.can_port)
-        ),
-        can_bustype=str(
-            os.environ.get("CURA_CAN_BUSTYPE", defaults.can_bustype)
-        ),
-        arm_speed=int(
-            _get("CURA_ARM_SPEED", defaults.arm_speed, int)
-        ),
-        arm_camera_index=int(
-            _get("CURA_ARM_CAMERA_INDEX", defaults.arm_camera_index, int)
-        ),
-        patient_camera_url=str(
-            os.environ.get("CURA_PATIENT_CAMERA_URL", defaults.patient_camera_url)
-        ),
-        detection_confidence=float(
-            _get("CURA_DETECTION_CONFIDENCE", defaults.detection_confidence, float)
-        ),
-        depth_min_mm=float(
-            _get("CURA_DEPTH_MIN_MM", defaults.depth_min_mm, float)
-        ),
-        depth_max_mm=float(
-            _get("CURA_DEPTH_MAX_MM", defaults.depth_max_mm, float)
-        ),
-        orbbec_color_width=int(
-            _get("CURA_ORBBEC_COLOR_WIDTH", defaults.orbbec_color_width, int)
-        ),
-        orbbec_color_height=int(
-            _get("CURA_ORBBEC_COLOR_HEIGHT", defaults.orbbec_color_height, int)
-        ),
-        orbbec_depth_width=int(
-            _get("CURA_ORBBEC_DEPTH_WIDTH", defaults.orbbec_depth_width, int)
-        ),
-        orbbec_depth_height=int(
-            _get("CURA_ORBBEC_DEPTH_HEIGHT", defaults.orbbec_depth_height, int)
-        ),
-        orbbec_fps=int(
-            _get("CURA_ORBBEC_FPS", defaults.orbbec_fps, int)
-        ),
+        can_port=str(os.environ.get("CURA_CAN_PORT", defaults.can_port)),
+        arm_speed=int(_get("CURA_ARM_SPEED", defaults.arm_speed, int)),
         waypoints_file=Path(
             os.environ.get("CURA_WAYPOINTS_FILE", str(defaults.waypoints_file))
         ),
-        server_host=str(
-            os.environ.get("CURA_SERVER_HOST", defaults.server_host)
-        ),
-        server_port=int(
-            _get("CURA_SERVER_PORT", defaults.server_port, int)
-        ),
+        server_host=str(os.environ.get("CURA_SERVER_HOST", defaults.server_host)),
+        server_port=int(_get("CURA_SERVER_PORT", defaults.server_port, int)),
         estop_timeout_seconds=float(
             _get("CURA_ESTOP_TIMEOUT_SECONDS", defaults.estop_timeout_seconds, float)
         ),
         waypoint_reach_tolerance=float(
-            _get(
-                "CURA_WAYPOINT_REACH_TOLERANCE",
-                defaults.waypoint_reach_tolerance,
-                float,
-            )
+            _get("CURA_WAYPOINT_REACH_TOLERANCE", defaults.waypoint_reach_tolerance, float)
         ),
         waypoint_timeout_seconds=float(
-            _get(
-                "CURA_WAYPOINT_TIMEOUT_SECONDS",
-                defaults.waypoint_timeout_seconds,
-                float,
-            )
+            _get("CURA_WAYPOINT_TIMEOUT_SECONDS", defaults.waypoint_timeout_seconds, float)
         ),
         gripper_open_position=int(
-            _get(
-                "CURA_GRIPPER_OPEN_POSITION",
-                defaults.gripper_open_position,
-                int,
-            )
+            _get("CURA_GRIPPER_OPEN_POSITION", defaults.gripper_open_position, int)
         ),
         gripper_close_position=int(
-            _get(
-                "CURA_GRIPPER_CLOSE_POSITION",
-                defaults.gripper_close_position,
-                int,
-            )
+            _get("CURA_GRIPPER_CLOSE_POSITION", defaults.gripper_close_position, int)
         ),
-        gripper_effort=int(
-            _get("CURA_GRIPPER_EFFORT", defaults.gripper_effort, int)
-        ),
+        gripper_effort=int(_get("CURA_GRIPPER_EFFORT", defaults.gripper_effort, int)),
     )
 
 

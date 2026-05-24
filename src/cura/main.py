@@ -69,7 +69,6 @@ class CuraOrchestrator:
         self._arm = ArmController(
             can_port=settings.can_port,
             speed=settings.arm_speed,
-            bustype=settings.can_bustype,
         )
         self._server = CuraServer()
         self._waypoints = load_waypoints(settings.waypoints_file)
@@ -180,7 +179,8 @@ class CuraOrchestrator:
                 return
 
     def _handle_approaching(self) -> None:
-        """Open the gripper and move to the pre-grasp position."""
+        """Zero the arm, open the gripper, and move to the pre-grasp position."""
+        self._arm.go_to_zero()
         self._arm.open_gripper()
 
         approach_steps = PICKUP_SEQUENCE[:2]  # ["home", "pre_grasp"]
@@ -302,8 +302,6 @@ class CuraOrchestrator:
 
 def main() -> None:
     """Entry point: configure logging, create orchestrator, and run."""
-    import os
-    import platform
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -311,10 +309,6 @@ def main() -> None:
     orchestrator = CuraOrchestrator()
     signal.signal(signal.SIGINT, lambda s, f: orchestrator.stop())
     orchestrator.start()
-    # On macOS with gs_usb, normal Python shutdown segfaults due to libusb
-    # GC teardown racing with background CAN threads. os._exit skips GC.
-    if platform.system() == "Darwin":
-        os._exit(0)
 
 
 if __name__ == "__main__":

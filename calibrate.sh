@@ -1,17 +1,14 @@
 #!/bin/bash
-# Cura arm calibration — check arm state and optionally zero the gripper
-# Run this once after physically attaching the gripper for the first time.
+# Cura arm calibration — check arm state and optionally zero the gripper.
+# Linux / Raspberry Pi only.
 #
 # What it does:
 #   1. Reads and prints all joint positions + gripper state
 #   2. Reports homing status from the arm firmware
 #   3. Optionally zeroes the gripper (sets fully-closed as position 0)
-#
-# The "check joint 6 after attaching gripper" warning means:
-#   The gripper finger motor needs a zero reference so the firmware knows
-#   where "fully closed" is. Run option [z] below to set it.
 
 set -e
+export PATH="$HOME/.local/bin:$PATH"
 cd "$(dirname "$0")"
 
 echo "================================================"
@@ -21,63 +18,57 @@ echo ""
 echo "📋  Reading arm state..."
 echo ""
 
-sudo .venv/bin/python - <<'PYEOF'
-import sys, time
+sudo ip link set can0 type can bitrate 1000000 2>/dev/null || true
+sudo ip link set up can0
 
-from gs_usb.gs_usb import GsUsb
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.3)
+uv run python - <<'PYEOF'
+import math
+import time
+from pyAgxArm import create_agx_arm_config, AgxArmFactory, ArmModel, PiperFW
 
-from piper_sdk import C_PiperInterface
-
-p = C_PiperInterface("0", judge_flag=False, can_auto_init=False)
-p.CreateCanBus("0", bustype="gs_usb", expected_bitrate=1000000, judge_flag=False)
-p.ConnectPort()
+cfg = create_agx_arm_config(
+    robot=ArmModel.PIPER,
+    firmeware_version=PiperFW.DEFAULT,
+    interface="socketcan",
+    channel="can0",
+)
+robot = AgxArmFactory.create_arm(cfg)
+gripper = None
+try:
+    gripper = robot.init_effector(robot.OPTIONS.EFFECTOR.AGX_GRIPPER)
+except Exception as e:
+    print(f"⚠️   Could not init gripper effector: {e}")
+robot.connect()
 time.sleep(1.5)
 
-# ── Joint positions ──────────────────────────────────────────────────────────
-j = p.GetArmJointMsgs()
-s = j.joint_state
-vals = [s.joint_1, s.joint_2, s.joint_3, s.joint_4, s.joint_5, s.joint_6]
-print("Joint positions (0.001° units / degrees):")
-for i, v in enumerate(vals, start=1):
-    deg = v / 1000.0
-    print(f"  J{i}: {int(v):>8}  ({deg:+.3f}°)")
+# Joint positions (pyAgxArm returns radians).
+ja = robot.get_joint_angles()
+if ja is None:
+    print("⚠️   No joint feedback yet — is the arm powered on?")
+else:
+    rads = ja.msg
+    print("Joint positions (0.001° units / degrees):")
+    for i, r in enumerate(rads, start=1):
+        deg = math.degrees(r)
+        units = deg * 1000.0  # 0.001-deg units
+        print(f"  J{i}: {int(units):>8}  ({deg:+.3f}°)")
 
-# ── Gripper ──────────────────────────────────────────────────────────────────
-try:
-    g = p.GetArmGripperMsgs()
-    gpos = g.gripper_state.pos
-    geff = g.gripper_state.effort
-    print(f"\nGripper position : {int(gpos):>8}  (0 = fully closed, 70000 = fully open)")
-    print(f"Gripper effort   : {int(geff):>8}")
-except Exception as e:
-    print(f"\nGripper read failed: {e}")
+# Gripper (pyAgxArm reports width in metres, force in newtons).
+if gripper is not None:
+    try:
+        gs = gripper.get_gripper_status()
+        if gs is None:
+            print("\n⚠️   No gripper feedback received")
+        else:
+            width_m = float(gs.msg.value)
+            print(f"\nGripper position : {int(width_m * 1e6):>8}  (0 = closed, 70000 = open, units = 0.001 mm)")
+            print(f"Gripper force    : {gs.msg.force:>8.3f} N")
+    except Exception as e:
+        print(f"\nGripper read failed: {e}")
 
-# ── Arm status / homing ──────────────────────────────────────────────────────
-try:
-    s = p.GetArmStatus()
-    hs = getattr(s, "homing_status", None)
-    if hs is not None:
-        zeroed = "✅ zeroed" if hs else "⚠️  NOT zeroed — gripper calibration needed"
-        print(f"\nHoming status    : {zeroed}")
-    else:
-        print("\nHoming status    : (not available in this SDK version)")
-except Exception as e:
-    print(f"\nArm status read failed: {e}")
-
-# ── CAN health ───────────────────────────────────────────────────────────────
-fps = p.GetCanFps()
+# CAN health (pyAgxArm exposes the receive frequency in Hz via get_fps()).
+fps = robot.get_fps()
 print(f"\nCAN FPS          : {fps:.1f}  ({'✅ healthy' if fps > 100 else '⚠️  low — check cable'})")
-
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.2)
-
-import os; os._exit(0)
 PYEOF
 
 echo ""
@@ -86,9 +77,6 @@ echo "  What do you want to do?"
 echo "================================================"
 echo ""
 echo "  [z]  Zero the gripper  (run once after attaching gripper)"
-echo "       → Closes gripper fully and sets that as position 0"
-echo "       → Only needed if homing_status is NOT zeroed"
-echo ""
 echo "  [q]  Quit (no changes)"
 echo ""
 read -r -p "Choice [z/q]: " CHOICE
@@ -99,10 +87,7 @@ if [[ "$CHOICE" != "z" && "$CHOICE" != "Z" ]]; then
 fi
 
 echo ""
-echo "⚠️   Gripper zeroing procedure"
-echo "    The arm must be in a safe resting position (not near the patient)."
-echo "    The gripper will close fully before setting zero."
-echo ""
+echo "⚠️   Gripper zeroing: arm must be in a safe resting position."
 read -r -p "Arm is safe and clear — proceed? [y/N]: " CONFIRM
 if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
     echo "Aborted."
@@ -112,59 +97,43 @@ fi
 echo ""
 echo "🔧  Zeroing gripper..."
 
-sudo .venv/bin/python - <<'PYEOF'
-import sys, time
+uv run python - <<'PYEOF'
+import time
+from pyAgxArm import create_agx_arm_config, AgxArmFactory, ArmModel, PiperFW
 
-from gs_usb.gs_usb import GsUsb
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.3)
-
-from piper_sdk import C_PiperInterface
-
-p = C_PiperInterface("0", judge_flag=False, can_auto_init=False)
-p.CreateCanBus("0", bustype="gs_usb", expected_bitrate=1000000, judge_flag=False)
-p.ConnectPort()
-p.EnableArm(7)
-time.sleep(1.5)
-
-# Step 1: Close gripper fully (let it reach mechanical stop)
-print("  Closing gripper to mechanical stop...")
-p.GripperCtrl(0, 1000)
-time.sleep(2.0)
-
-# Step 2: Set current closed position as zero
-# 0xAE is the piper_sdk "set zero" flag (from piper_set_gripper_zero.py demo)
-try:
-    p.GripperCtrl(0, 1000, 0x00, 0xAE)
-    print("  ✅  Gripper zero set (4-arg API)")
-except TypeError:
-    # Older C_PiperInterface may not support the 3rd/4th args.
-    # In that case the gripper zero must be set via C_PiperInterface_V2.
-    print("  ⚠️   4-arg GripperCtrl not available in this SDK version.")
-    print("       Try: sudo .venv/bin/python -c \"")
-    print("         from piper_sdk import C_PiperInterface_V2")
-    print("         p = C_PiperInterface_V2('0')")
-    print("         p.CreateCanBus('0', bustype='gs_usb', expected_bitrate=1000000, judge_flag=False)")
-    print("         p.ConnectPort()")
-    print("         import time; time.sleep(1.5)")
-    print("         p.GripperCtrl(0, 1000, 0x00, 0xAE)")
-    print("       \"")
-
+cfg = create_agx_arm_config(
+    robot=ArmModel.PIPER,
+    firmeware_version=PiperFW.DEFAULT,
+    interface="socketcan",
+    channel="can0",
+)
+robot = AgxArmFactory.create_arm(cfg)
+gripper = robot.init_effector(robot.OPTIONS.EFFECTOR.AGX_GRIPPER)
+robot.connect()
 time.sleep(0.5)
 
-# Verify
-g = p.GetArmGripperMsgs()
-print(f"  Gripper position after zeroing: {int(g.gripper_state.pos)}")
-print("  (should read 0 or very close)")
+# Make sure motors are enabled before driving the gripper.
+deadline = time.monotonic() + 5.0
+while time.monotonic() < deadline and not robot.enable():
+    time.sleep(0.05)
 
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.2)
+print("  Closing gripper to mechanical stop...")
+# Drive to 0 m with the maximum supported force (3 N) so the gripper presses
+# against its hard stop.
+gripper.move_gripper_m(value=0.0, force=3.0)
+time.sleep(2.0)
 
-import os; os._exit(0)
+# Calibrate: set the current position as the gripper zero.
+ok = gripper.calibrate_gripper()
+print(f"  {'✅' if ok else '⚠️ '}  Gripper zero set" + ("" if ok else " (no ack received)"))
+time.sleep(0.5)
+
+gs = gripper.get_gripper_status()
+if gs is None:
+    print("  ⚠️   No gripper feedback after zeroing")
+else:
+    width_units = int(float(gs.msg.value) * 1e6)
+    print(f"  Gripper position after zeroing: {width_units}  (should read 0)")
 PYEOF
 
 echo ""

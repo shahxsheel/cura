@@ -1,112 +1,70 @@
 #!/bin/bash
+# Cura setup — Raspberry Pi / Linux only.
+# Installs uv, syncs Python deps, brings up the SocketCAN interface, and
+# does a smoke-test read from the arm if the CAN adapter is present.
+
 set -e
+export PATH="$HOME/.local/bin:$PATH"
+cd "$(dirname "$0")"
 
 echo "================================================"
-echo "  Cura — Robotic Feeding Assistant Setup"
+echo "  Cura — Setup (Raspberry Pi / Linux)"
 echo "================================================"
 echo ""
 
-# ── 1. Check for Homebrew ────────────────────────────────────────────────────
-if ! command -v brew &>/dev/null; then
-    echo "❌  Homebrew not found. Install it first:"
-    echo "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-    exit 1
-fi
-echo "✅  Homebrew found"
-
-# ── 2. Install libusb (required for CAN adapter on macOS) ───────────────────
-if ! brew list libusb &>/dev/null; then
-    echo "📦  Installing libusb..."
-    brew install libusb
-else
-    echo "✅  libusb already installed"
-fi
-
-# ── 3. Check for uv ─────────────────────────────────────────────────────────
+# ── uv ───────────────────────────────────────────────────────────────────────
 if ! command -v uv &>/dev/null; then
     echo "📦  Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.cargo/bin:$PATH"
+    source "$HOME/.local/bin/env" 2>/dev/null || export PATH="$HOME/.local/bin:$PATH"
 else
     echo "✅  uv $(uv --version) found"
 fi
 
-# ── 4. Install Python dependencies ──────────────────────────────────────────
-echo ""
-echo "📦  Installing Python dependencies (this may take a minute)..."
+# ── Python deps ──────────────────────────────────────────────────────────────
+echo "📦  Installing Python dependencies..."
 uv sync
 echo "✅  Dependencies installed"
 
-# ── 5. Detect hardware ──────────────────────────────────────────────────────
+# ── SocketCAN ────────────────────────────────────────────────────────────────
 echo ""
-echo "🔍  Checking hardware..."
-
-# Check for CAN adapter (candleLight VID=0x1D50 PID=0x606F)
-if ioreg -r -c IOUSBHostDevice -l 2>/dev/null | grep -q "candleLight"; then
+if lsusb 2>/dev/null | grep -qi "1d50:606f"; then
     echo "✅  CAN adapter (candleLight) detected"
-    CAN_OK=true
-else
-    echo "⚠️   CAN adapter NOT detected — check USB connection to arm"
-    CAN_OK=false
-fi
+    echo "🔧  Bringing up can0 @ 1 Mbit/s..."
+    sudo ip link set can0 type can bitrate 1000000 2>/dev/null || true
+    sudo ip link set up can0
+    echo "✅  can0 is up"
 
-# Check for Orbbec camera (VID=0x2BC5)
-if ioreg -r -c IOUSBHostDevice -l 2>/dev/null | grep -qi "orbbec\|Dabai"; then
-    echo "✅  Orbbec depth camera detected"
-    CAM_OK=true
-else
-    echo "⚠️   Orbbec camera NOT detected — check USB connection"
-    CAM_OK=false
-fi
+    echo ""
+    echo "🦾  Testing arm connection..."
+    uv run python - <<'PYEOF'
+import time
+from pyAgxArm import create_agx_arm_config, AgxArmFactory, ArmModel, PiperFW
 
-# ── 6. Test CAN connection ───────────────────────────────────────────────────
-echo ""
-if [ "$CAN_OK" = true ]; then
-    echo "🦾  Testing arm connection (requires sudo for USB access)..."
-    sudo .venv/bin/python - <<'PYEOF'
-import sys, time
-try:
-    from piper_sdk import C_PiperInterface
-    p = C_PiperInterface("0", judge_flag=False, can_auto_init=False)
-    p.CreateCanBus("0", bustype="gs_usb", expected_bitrate=1000000, judge_flag=False)
-    p.ConnectPort()
-    time.sleep(1.5)
-    j = p.GetArmJointMsgs()
-    fps = p.GetCanFps()
-    if fps > 0:
-        print(f"✅  Arm connected! CAN FPS: {fps:.1f}")
-        print(f"   Joints: {j}")
-    else:
-        print("⚠️   Arm connected but no CAN data — is the arm powered on?")
-except Exception as e:
-    print(f"❌  Arm connection failed: {e}")
-    sys.exit(1)
+cfg = create_agx_arm_config(
+    robot=ArmModel.PIPER,
+    firmeware_version=PiperFW.DEFAULT,
+    interface="socketcan",
+    channel="can0",
+)
+robot = AgxArmFactory.create_arm(cfg)
+robot.connect()
+time.sleep(1.5)
+fps = robot.get_fps()
+print(f"✅  Arm CAN FPS: {fps:.1f}" if fps > 0 else "⚠️   No CAN data — is arm powered on?")
 PYEOF
 else
-    echo "⏭️   Skipping arm test (adapter not detected)"
+    echo "⚠️   CAN adapter not detected — check USB cable"
 fi
 
-# ── 7. Print next steps ──────────────────────────────────────────────────────
 echo ""
 echo "================================================"
-echo "  Setup complete! Next steps:"
+echo "  Done! Next steps:"
 echo "================================================"
+echo "  Calibrate : ./calibrate.sh"
+echo "  Teach     : ./teach.sh <waypoint_name>"
+echo "  Run       : ./run.sh"
 echo ""
-echo "  1. Teach waypoints (first time only):"
-echo "     sudo uv run python -c \""
-echo "       from piper_sdk import C_PiperInterface"
-echo "       from cura.arm.trajectories import teach_and_save"
-echo "       p = C_PiperInterface('0', judge_flag=False, can_auto_init=False)"
-echo "       p.CreateCanBus('0', bustype='gs_usb', expected_bitrate=1000000, judge_flag=False)"
-echo "       p.ConnectPort()"
-echo "       # Move arm to position, then:"
-echo "       teach_and_save(p, 'pre_grasp', 'waypoints.json')"
-echo "     \""
-echo ""
-echo "  2. Run Cura:"
-echo "     ./run.sh"
-echo ""
-echo "  Keyboard controls:"
-echo "     SPACE = Start feeding / Done drinking"
-echo "     ESC   = Emergency stop"
+echo "  Waypoints to teach (in order):"
+echo "    pre_grasp, grasp, lift, pre_deliver, deliver, home"
 echo ""

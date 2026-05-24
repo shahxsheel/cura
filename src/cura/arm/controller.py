@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 import time
 
@@ -7,38 +8,53 @@ from cura.arm.trajectories import JointConfig, WAYPOINTS
 
 logger = logging.getLogger(__name__)
 
-_POSITION_TOLERANCE: float = 500.0   # 0.001 deg — ~0.5 degrees
+# JointConfig stores joint values in 0.001-degree units (legacy piper_sdk
+# convention preserved so safety.JOINT_LIMITS and the orchestrator keep
+# working without modification). pyAgxArm expects/returns radians, so we
+# convert at the controller boundary.
+#
+# 1 degree = 1000 * 0.001-deg units = (pi/180) rad
+# Therefore 1 unit (0.001 deg) = (pi/180000) rad
+_UNIT_PER_RAD: float = 180000.0 / math.pi   # radians  -> 0.001-deg units
+_RAD_PER_UNIT: float = math.pi / 180000.0   # 0.001-deg units -> radians
+
+_POSITION_TOLERANCE: float = 500.0    # 0.001-deg units (~0.5 degrees)
 _REACH_TIMEOUT: float = 10.0          # seconds to wait for a waypoint to be reached
-_REACH_POLL_INTERVAL: float = 0.05   # seconds between position polls
+_REACH_POLL_INTERVAL: float = 0.05    # seconds between position polls
+_ENABLE_TIMEOUT: float = 5.0          # seconds to spend polling robot.enable()
+
+# Gripper unit translation: the orchestrator passes "piper-style" integer
+# units (position is 0.001 mm, max 70000 = 70 mm = 0.07 m; effort is 0..1000
+# mapping onto pyAgxArm's [0.0, 3.0] N gripping-force range).
+_GRIPPER_M_PER_UNIT: float = 1e-6              # 0.001 mm -> m
+_GRIPPER_FORCE_PER_UNIT: float = 3.0 / 1000.0  # piper 0..1000 -> N
 
 
 class ArmController:
     """High-level interface for the AgileX Piper 6-DOF arm.
 
-    Wraps C_PiperInterface with safety validation, threaded sequence execution,
-    and an emergency stop mechanism.
+    Wraps the pyAgxArm driver with safety validation, threaded sequence
+    execution, and an emergency stop mechanism. Linux/SocketCAN only.
     """
 
-    def __init__(self, can_port: str = "can0", speed: int = 50, bustype: str = "auto") -> None:
+    def __init__(self, can_port: str = "can0", speed: int = 50) -> None:
         """
         Parameters
         ----------
         can_port:
-            CAN bus device name. Used for socketcan ("can0" on Linux) and slcan
-            ("/dev/cu.usbmodemXXX" on macOS). Not used for gs_usb — that always
-            uses channel "0" via libusb.
+            SocketCAN device name (e.g. "can0"). The interface must already
+            be brought up with `ip link set can0 up type can bitrate 1000000`.
         speed:
-            Motion speed passed to MotionCtrl_2, 0-100.
-        bustype:
-            CAN bus type: "auto" detects the OS ("gs_usb" on Darwin for the
-            candleLight adapter, "socketcan" on Linux). Explicit values
-            "socketcan", "gs_usb", or "slcan" override auto-detection.
+            Motion speed percentage passed to set_speed_percent, 0-100.
         """
         self._can_port = can_port
         self._speed = speed
-        self._bustype = bustype
         self._safety = SafetyModule()
+        # _piper holds the pyAgxArm Driver instance. The attribute name is
+        # kept for compatibility with existing tests and the trajectory
+        # teach helper.
         self._piper: object | None = None
+        self._gripper: object | None = None
         self._stop_event = threading.Event()
         self._movement_thread: threading.Thread | None = None
         self._connected = False
@@ -48,76 +64,92 @@ class ArmController:
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """Initialise and enable the arm over CAN.
-
-        Supports Linux (SocketCAN, auto-init) and macOS (gs_usb via candleLight
-        USB-to-CAN adapter, or slcan via serial port). The bus type is resolved
-        from ``self._bustype``: when set to "auto" the OS is detected at runtime
-        — "gs_usb" on Darwin, "socketcan" elsewhere. Explicit values
-        "socketcan", "gs_usb", or "slcan" bypass detection.
+        """Initialise, enable, and zero the arm over SocketCAN.
 
         Returns True on success, False if an exception occurs.
         """
         try:
-            import platform as _platform
-            from piper_sdk import C_PiperInterface
+            from pyAgxArm import (
+                create_agx_arm_config,
+                AgxArmFactory,
+                ArmModel,
+                PiperFW,
+            )
 
-            bustype = self._bustype
-            if bustype == "auto":
-                bustype = "gs_usb" if _platform.system() == "Darwin" else "socketcan"
-
-            if bustype in ("gs_usb", "slcan"):
-                # macOS: manual CAN bus init (gs_usb for candleLight, slcan for serial adapters)
-                if bustype == "gs_usb":
-                    # Send a CAN-level STOP to the candleLight before re-initialising.
-                    # This resets the adapter's CAN controller without touching the USB
-                    # device — dev.reset() times out on macOS and makes things worse.
-                    try:
-                        from gs_usb.gs_usb import GsUsb as _GsUsb
-                        for _dev in _GsUsb.scan():
-                            try:
-                                _dev.stop()
-                            except Exception:
-                                pass
-                        time.sleep(0.3)
-                        logger.info("candleLight CAN controller stopped (clean state)")
-                    except Exception as _e:
-                        logger.debug("gs_usb pre-stop skipped: %s", _e)
-
-                self._piper = C_PiperInterface(
-                    can_name=self._can_port,
-                    judge_flag=False,
-                    can_auto_init=False,
+            cfg = create_agx_arm_config(
+                robot=ArmModel.PIPER,
+                firmeware_version=PiperFW.DEFAULT,
+                interface="socketcan",
+                channel=self._can_port,
+            )
+            robot = AgxArmFactory.create_arm(cfg)
+            self._piper = robot
+            # init_effector must run *before* connect() so the reader thread
+            # picks up gripper feedback frames as well.
+            try:
+                self._gripper = robot.init_effector(
+                    robot.OPTIONS.EFFECTOR.AGX_GRIPPER
                 )
-                can_name = "0" if bustype == "gs_usb" else self._can_port
-                self._piper.CreateCanBus(
-                    can_name=can_name,
-                    bustype=bustype,
-                    expected_bitrate=1000000,
-                    judge_flag=False,
-                )
-            else:
-                # Linux: SocketCAN auto-init
-                self._piper = C_PiperInterface(
-                    can_name=self._can_port,
-                    judge_flag=False,
-                    can_auto_init=True,
-                )
+            except Exception:
+                logger.exception("Failed to init gripper effector — gripper calls will be no-ops")
+                self._gripper = None
 
-            self._piper.ConnectPort()
-            self._piper.EnableArm(7)
-            self._piper.MotionCtrl_2(0x01, 0x01, self._speed)
+            robot.connect()
+            time.sleep(0.5)  # let pyAgxArm's reader thread spin up
+
+            # Enable all joints. enable() can return False for a few cycles
+            # before motors actually power on, so poll briefly.
+            enabled = False
+            deadline = time.monotonic() + _ENABLE_TIMEOUT
+            while time.monotonic() < deadline:
+                if robot.enable():
+                    enabled = True
+                    break
+                time.sleep(0.05)
+            if not enabled:
+                logger.warning("Arm enable() did not succeed within %.1fs", _ENABLE_TIMEOUT)
+
+            robot.set_speed_percent(self._speed)
+            time.sleep(0.2)
             self._connected = True
-            logger.info("Connected to Piper arm (bustype=%s)", bustype)
+            logger.info("Connected to Piper arm on %s", self._can_port)
+
+            # Drive to all-zeros so the motors lock in a known reference
+            # position before any real motion commands.
+            self.go_to_zero()
             return True
         except Exception as e:
             logger.error("Failed to connect to arm: %s", e)
             self._connected = False
             return False
 
+    def go_to_zero(self, timeout: float = 15.0) -> bool:
+        """Send all six joints to 0 and block until reached (or timeout)."""
+        if self._piper is None:
+            logger.error("Arm not connected — cannot zero")
+            return False
+        logger.info("Zeroing arm (all joints → 0)…")
+        self._piper.move_j([0.0] * 6)  # type: ignore[attr-defined]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                return False
+            current = self.get_joint_positions()
+            if all(abs(v) <= _POSITION_TOLERANCE for v in current):
+                logger.info("Arm at zero position")
+                return True
+            time.sleep(_REACH_POLL_INTERVAL)
+        logger.warning("go_to_zero timed out after %.1fs", timeout)
+        return False
+
     def disconnect(self) -> None:
         """Emergency-stop the arm and mark it as disconnected."""
         self.emergency_stop()
+        if self._piper is not None and self._connected:
+            try:
+                self._piper.disconnect()  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception("Error during pyAgxArm disconnect()")
         self._connected = False
         logger.info("Arm disconnected")
 
@@ -154,9 +186,9 @@ class ArmController:
             logger.error("Arm not connected — cannot execute waypoint %r", name)
             return False
 
-        self._piper.JointCtrl(
-            cfg.j1, cfg.j2, cfg.j3, cfg.j4, cfg.j5, cfg.j6
-        )
+        # Convert from JointConfig's 0.001-deg units to radians for pyAgxArm.
+        joints_rad = [v * _RAD_PER_UNIT for v in joints]
+        self._piper.move_j(joints_rad)  # type: ignore[attr-defined]
         logger.info("Moving to waypoint %r", name)
 
         deadline = time.monotonic() + _REACH_TIMEOUT
@@ -181,9 +213,9 @@ class ArmController:
 
         Returns True if the full sequence completed, False if aborted.
         The method launches the thread and returns immediately; use
-        wait_for_completion() to block until done.
+        wait_for_completion() to block until done. If the stop event is set
+        (emergency stop) the sequence is aborted before any motion command.
         """
-        self._stop_event.clear()
         result: list[bool] = []
 
         def _run() -> None:
@@ -208,20 +240,34 @@ class ArmController:
     # ------------------------------------------------------------------
 
     def open_gripper(self, position: int = 70000) -> None:
-        """Open the gripper to *position* (0.001 mm units, max 70000)."""
-        if self._piper is None:
-            logger.error("Arm not connected — cannot open gripper")
+        """Open the gripper to *position* (0.001 mm units, max 70000 = 70 mm)."""
+        if self._gripper is None:
+            logger.error("Gripper not initialised — cannot open")
             return
-        self._piper.GripperCtrl(position, 500)
-        logger.debug("Gripper opened to position %d", position)
+        width_m = position * _GRIPPER_M_PER_UNIT
+        # 500 in legacy piper units; map to a moderate force ≈1.5 N.
+        force_n = 500 * _GRIPPER_FORCE_PER_UNIT
+        try:
+            self._gripper.move_gripper_m(value=width_m, force=force_n)  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("Error opening gripper")
+            return
+        logger.debug("Gripper opened to %.4f m (%d units)", width_m, position)
 
     def close_gripper(self, position: int = 5000, effort: int = 800) -> None:
-        """Close the gripper to *position* with *effort* (0-1000)."""
-        if self._piper is None:
-            logger.error("Arm not connected — cannot close gripper")
+        """Close the gripper to *position* (0.001 mm) with *effort* (0-1000)."""
+        if self._gripper is None:
+            logger.error("Gripper not initialised — cannot close")
             return
-        self._piper.GripperCtrl(position, effort)
-        logger.debug("Gripper closed to position %d with effort %d", position, effort)
+        width_m = position * _GRIPPER_M_PER_UNIT
+        # Clamp effort into pyAgxArm's [0.0, 3.0] N gripping-force range.
+        force_n = max(0.0, min(3.0, effort * _GRIPPER_FORCE_PER_UNIT))
+        try:
+            self._gripper.move_gripper_m(value=width_m, force=force_n)  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("Error closing gripper")
+            return
+        logger.debug("Gripper closed to %.4f m (%d units) with %.2f N", width_m, position, force_n)
 
     # ------------------------------------------------------------------
     # Safety
@@ -232,14 +278,25 @@ class ArmController:
         self._stop_event.set()
         if self._piper is not None and self._connected:
             try:
-                self._piper.MotionCtrl_2(0x00, 0x00, 0)
+                self._piper.electronic_emergency_stop()  # type: ignore[attr-defined]
             except Exception:
                 logger.exception("Error sending stop command to arm")
         logger.critical("Emergency stop executed")
 
     def reset_stop(self) -> None:
-        """Clear the stop event so the arm can accept new commands after an e-stop."""
+        """Clear the stop event and resume from emergency stop."""
         self._stop_event.clear()
+        if self._piper is not None and self._connected:
+            try:
+                # reset() clears the e-stop state and powers off; re-enable
+                # and restore the configured speed so subsequent move_j calls
+                # work straight away.
+                self._piper.reset()  # type: ignore[attr-defined]
+                time.sleep(0.1)
+                self._piper.enable()  # type: ignore[attr-defined]
+                self._piper.set_speed_percent(self._speed)  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception("Error resuming arm from e-stop")
         logger.info("Stop event cleared — arm ready for new commands")
 
     # ------------------------------------------------------------------
@@ -254,8 +311,11 @@ class ArmController:
         if self._piper is None:
             return [0.0] * 6
         try:
-            msgs = self._piper.GetArmJointMsgs()
-            return [float(v) for v in msgs.joint_state.position[:6]]
+            msg = self._piper.get_joint_angles()  # type: ignore[attr-defined]
+            if msg is None:
+                return [0.0] * 6
+            rads = msg.msg  # list[float] of length 6, radians
+            return [float(r) * _UNIT_PER_RAD for r in rads]
         except Exception:
             logger.exception("Failed to read joint positions")
             return [0.0] * 6

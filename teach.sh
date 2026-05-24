@@ -1,9 +1,10 @@
 #!/bin/bash
-# Cura teaching mode — record arm waypoints
+# Cura teaching mode — record arm waypoints.
 # Usage: ./teach.sh <waypoint_name>
 # Example: ./teach.sh pre_grasp
 
 set -e
+export PATH="$HOME/.local/bin:$PATH"
 cd "$(dirname "$0")"
 
 WAYPOINT="${1:-}"
@@ -24,32 +25,24 @@ echo "📍  Recording waypoint: $WAYPOINT"
 echo "    Move the arm to the desired position, then press ENTER"
 read -r
 
-sudo .venv/bin/python - "$WAYPOINT" <<'PYEOF'
-import sys, os, time
+sudo ip link set can0 type can bitrate 1000000 2>/dev/null || true
+sudo ip link set up can0
 
-# CAN-level stop before connecting — resets adapter state without USB reset
-# (dev.reset() times out on macOS and makes things worse)
-from gs_usb.gs_usb import GsUsb
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.3)
-
-from piper_sdk import C_PiperInterface
+uv run python - "$WAYPOINT" <<'PYEOF'
+import sys, time
+from pyAgxArm import create_agx_arm_config, AgxArmFactory, ArmModel, PiperFW
 from cura.arm.trajectories import teach_and_save
 
 waypoint = sys.argv[1]
-p = C_PiperInterface("0", judge_flag=False, can_auto_init=False)
-p.CreateCanBus("0", bustype="gs_usb", expected_bitrate=1000000, judge_flag=False)
-p.ConnectPort()
+cfg = create_agx_arm_config(
+    robot=ArmModel.PIPER,
+    firmeware_version=PiperFW.DEFAULT,
+    interface="socketcan",
+    channel="can0",
+)
+robot = AgxArmFactory.create_arm(cfg)
+robot.connect()
 time.sleep(1.5)
-teach_and_save(p, waypoint, "waypoints.json")
+teach_and_save(robot, waypoint, "waypoints.json")
 print(f"✅  Waypoint '{waypoint}' saved to waypoints.json")
-
-# Stop CAN controller cleanly before exit to prevent stale state on next run
-for _dev in GsUsb.scan():
-    try: _dev.stop()
-    except Exception: pass
-time.sleep(0.2)
-os._exit(0)
 PYEOF

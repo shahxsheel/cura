@@ -115,14 +115,15 @@ class TestExecuteSequenceWithMockedPiper(unittest.TestCase):
     """execute_sequence should abort early when stop_event is set."""
 
     def _make_controller(self) -> "ArmController":  # type: ignore[name-defined]  # noqa: F821
-        """Return an ArmController wired up with a mock piper."""
+        """Return an ArmController wired up with a mock pyAgxArm driver."""
         from cura.arm.controller import ArmController
 
         ctrl = ArmController(can_port="can0", speed=50)
         mock_piper = MagicMock()
-        # Return joint positions that are exactly at each waypoint
-        # so execute_waypoint reports success immediately.
-        mock_piper.GetArmJointMsgs.return_value.joint_state.position = [0.0] * 6
+        # pyAgxArm returns radians in `.msg` (list of 6 floats). All zeros
+        # makes execute_waypoint report success immediately for the all-zero
+        # waypoints defined in WAYPOINTS.
+        mock_piper.get_joint_angles.return_value.msg = [0.0] * 6
         ctrl._piper = mock_piper
         ctrl._connected = True
         return ctrl
@@ -145,8 +146,8 @@ class TestExecuteSequenceWithMockedPiper(unittest.TestCase):
         ctrl._stop_event.set()
         ctrl.execute_sequence(PICKUP_SEQUENCE, WAYPOINTS)
         ctrl.wait_for_completion(timeout=2.0)
-        # JointCtrl should never have been called because the first waypoint check aborts
-        ctrl._piper.JointCtrl.assert_not_called()
+        # move_j should never have been called because the first waypoint check aborts
+        ctrl._piper.move_j.assert_not_called()
 
     def test_sequence_stops_mid_run_when_estop_called(self) -> None:
         """Emergency stop called after sequence starts should halt it early."""
@@ -157,20 +158,19 @@ class TestExecuteSequenceWithMockedPiper(unittest.TestCase):
         ctrl = self._make_controller()
 
         call_count: list[int] = [0]
-        original_joint_ctrl = ctrl._piper.JointCtrl
 
-        def counting_joint_ctrl(*args: object) -> None:
+        def counting_move_j(*args: object) -> None:
             call_count[0] += 1
             if call_count[0] >= 2:
                 # Trigger e-stop after the second waypoint command
                 ctrl.emergency_stop()
 
-        ctrl._piper.JointCtrl.side_effect = counting_joint_ctrl
+        ctrl._piper.move_j.side_effect = counting_move_j
 
         ctrl.execute_sequence(PICKUP_SEQUENCE, WAYPOINTS)
         ctrl.wait_for_completion(timeout=5.0)
 
-        # At most 2 JointCtrl calls should have occurred before abort
+        # At most 3 move_j calls should have occurred before abort
         self.assertLessEqual(call_count[0], 3)
 
 
@@ -188,7 +188,7 @@ class TestEmergencyStop(unittest.TestCase):
         ctrl.emergency_stop()
 
         self.assertTrue(ctrl._stop_event.is_set())
-        mock_piper.MotionCtrl_2.assert_called_once_with(0x00, 0x00, 0)
+        mock_piper.electronic_emergency_stop.assert_called_once_with()
 
     def test_reset_stop_clears_event(self) -> None:
         from cura.arm.controller import ArmController

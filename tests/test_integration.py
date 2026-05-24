@@ -33,6 +33,20 @@ def _make_server_mock() -> MagicMock:
     return server
 
 
+def _press_space_async(orchestrator, delay: float = 0.05) -> threading.Thread:
+    """Set _space_pressed shortly after returning, simulating a keypress.
+
+    _handle_idle and _handle_drinking clear _space_pressed at entry, so the
+    event must be set *after* the handler has started looping.
+    """
+    def _set() -> None:
+        time.sleep(delay)
+        orchestrator._space_pressed.set()
+    t = threading.Thread(target=_set, daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Test suite
 # ---------------------------------------------------------------------------
@@ -61,6 +75,8 @@ class TestStateMachineTransitions(unittest.TestCase):
         # Inject the mocks directly so tests can inspect them.
         orchestrator._arm = arm
         orchestrator._server = server
+        # Tests drive handlers directly without start() — flag the loop as running.
+        orchestrator._running = True
         return orchestrator
 
     # ------------------------------------------------------------------
@@ -128,19 +144,16 @@ class TestStateMachineTransitions(unittest.TestCase):
 
         orchestrator._transition = _recording_transition
 
-        # Press SPACE immediately (start feeding).
-        orchestrator._space_pressed.set()
-
-        # Run all states except IDLE (which blocks waiting for input) and
-        # DRINKING (which also blocks).  Drive each handler directly.
+        # Press SPACE after _handle_idle starts (it clears the event on entry).
+        _press_space_async(orchestrator)
         orchestrator._handle_idle()          # IDLE → APPROACHING
         orchestrator._handle_approaching()   # APPROACHING → GRASPING
         orchestrator._handle_grasping()      # GRASPING → LIFTING
         orchestrator._handle_lifting()       # LIFTING → DELIVERING
         orchestrator._handle_delivering()    # DELIVERING → DRINKING
 
-        # Press SPACE again (done drinking).
-        orchestrator._space_pressed.set()
+        # Press SPACE again (done drinking) — same async pattern.
+        _press_space_async(orchestrator)
         orchestrator._handle_drinking()      # DRINKING → RETRACTING
 
         orchestrator._handle_retracting()    # RETRACTING → RELEASING
@@ -167,7 +180,7 @@ class TestStateMachineTransitions(unittest.TestCase):
         arm = _make_arm_mock(wait_result=False)
         orchestrator = self._make_orchestrator(arm=arm)
 
-        orchestrator._space_pressed.set()
+        _press_space_async(orchestrator)
         orchestrator._handle_idle()         # → APPROACHING
         orchestrator._handle_approaching()  # arm reports failure → ERROR
 
@@ -223,7 +236,7 @@ class TestStateMachineTransitions(unittest.TestCase):
         orchestrator = self._make_orchestrator(arm=arm)
         orchestrator._state = SystemState.IDLE
 
-        orchestrator._space_pressed.set()
+        _press_space_async(orchestrator)
         orchestrator._handle_idle()
         orchestrator._handle_approaching()
 
@@ -248,7 +261,7 @@ class TestStateMachineTransitions(unittest.TestCase):
         orchestrator = self._make_orchestrator(arm=arm)
         orchestrator._state = SystemState.DRINKING
 
-        orchestrator._space_pressed.set()
+        _press_space_async(orchestrator)
         orchestrator._handle_drinking()
         orchestrator._handle_retracting()
 
@@ -260,7 +273,7 @@ class TestStateMachineTransitions(unittest.TestCase):
         server = _make_server_mock()
         orchestrator = self._make_orchestrator(arm=arm, server=server)
 
-        orchestrator._space_pressed.set()
+        _press_space_async(orchestrator)
         orchestrator._handle_idle()
 
         server.update_state.assert_called_with(SystemState.APPROACHING)

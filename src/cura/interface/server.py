@@ -11,7 +11,7 @@ Usage (from main.py)::
     server = CuraServer()
     server.run(host=settings.server_host, port=settings.server_port)
     # ... orchestrator loop ...
-    server.update_state(SystemState.DETECTING)
+    server.update_state(SystemState.APPROACHING)
 """
 import asyncio
 import logging
@@ -160,20 +160,12 @@ class CuraServer:
                 existing value is preserved.
         """
         _moving_states = {
-            SystemState.DETECTING,
             SystemState.APPROACHING,
             SystemState.GRASPING,
             SystemState.LIFTING,
             SystemState.DELIVERING,
             SystemState.RETRACTING,
             SystemState.RELEASING,
-            SystemState.SCANNING_PLATE,
-            SystemState.SELECTING_UTENSIL,
-            SystemState.PICKING_UTENSIL,
-            SystemState.SCOOPING,
-            SystemState.FEEDING,
-            SystemState.WIPING,
-            SystemState.RETURNING_UTENSIL,
         }
 
         with self._lock:
