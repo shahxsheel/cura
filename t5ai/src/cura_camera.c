@@ -30,10 +30,14 @@ static void _refresh(void *arg)
     }
 }
 
-/* Camera native resolution — 640×480 is in the GC2145 PPI table; 320×240 is not.
-   We request 640×480 and 2:1 downsample to the 320×240 canvas on the fly. */
-#define CAM_NATIVE_W 640
-#define CAM_NATIVE_H 480
+/* GC2145 native: 480×480 (smallest square in PPI table, used by TuyaOpen example).
+ * 640×480 needs ~1.84 MB internal buffers; 480×480 needs ~1.35 MB — fits in PSRAM.
+ * We center-crop 320×240 out of the 480×480 frame (no scaling). */
+#define CAM_NATIVE_W  480
+#define CAM_NATIVE_H  480
+#define CAM_X_START   ((CAM_NATIVE_W - 320) / 2)   /* 80 */
+#define CAM_Y_START   ((CAM_NATIVE_H - 240) / 2)   /* 120 */
+#define CAM_STRIDE    (CAM_NATIVE_W * 2)             /* UYVY: 2 bytes/pixel */
 
 static OPERATE_RET _frame_cb(TDL_CAMERA_HANDLE_T hdl, TDL_CAMERA_FRAME_T *frame)
 {
@@ -42,26 +46,20 @@ static OPERATE_RET _frame_cb(TDL_CAMERA_HANDLE_T hdl, TDL_CAMERA_FRAME_T *frame)
         return OPRT_OK;
     }
 
-    /* 2:1 nearest-neighbour downsample: sample every other column and row.
-     * YUYV layout: 4 bytes = [Y0, U, Y1, V] for two adjacent pixels.
-     * For output pixel (x_out, y_out) we sample source pixel (x_out*2, y_out*2).
-     * Source column x_out*2 is the Y0 byte of YUYV group x_out in row (y_out*2).
-     * Row stride = CAM_NATIVE_W * 2 bytes (2 bytes/pixel in packed YUYV). */
+    /* Center-crop 320×240 from 480×480 UYVY frame.
+     * DVP outputs UYVY: [U, Y0, V, Y1] per 4-byte group (TuyaOpen reference).
+     * BT.601 limited-range coefficients match TuyaOpen tal_image_yuv422_to_rgb.c. */
     const uint8_t *base = frame->data;
-    const int      stride = CAM_NATIVE_W * 2;   /* bytes per source row */
 
     for (int yo = 0; yo < s_h; yo++) {
-        const uint8_t *row = base + (size_t)(yo * 2) * stride;
+        const uint8_t *row = base + (size_t)(CAM_Y_START + yo) * CAM_STRIDE;
         uint16_t      *dst = s_buf + (size_t)yo * s_w;
         for (int xo = 0; xo < s_w; xo++) {
-            /* DVP outputs UYVY: [U, Y0, V, Y1] per 4-byte group (confirmed by
-             * TuyaOpen tal_image_yuv422_to_rgb.c). Group xo covers source
-             * columns xo*2 and xo*2+1; we sample Y0 (even pixel). */
-            const uint8_t *p = row + (size_t)xo * 4;
-            int32_t d = (int32_t)p[0] - 128;   /* U = Cb */
-            int32_t c = (int32_t)p[1] - 16;    /* Y0, BT.601 offset */
-            int32_t e = (int32_t)p[2] - 128;   /* V = Cr */
-            /* BT.601 limited-range YCbCr → RGB (same as TuyaOpen reference) */
+            int src_col = CAM_X_START + xo;
+            const uint8_t *p = row + (src_col >> 1) * 4;  /* UYVY group */
+            int32_t d = (int32_t)p[0] - 128;              /* U = Cb */
+            int32_t c = (int32_t)(src_col & 1 ? p[3] : p[1]) - 16; /* Y0 or Y1 */
+            int32_t e = (int32_t)p[2] - 128;              /* V = Cr */
             int32_t r = (298 * c + 409 * e + 128) >> 8;
             int32_t g = (298 * c - 100 * d - 208 * e + 128) >> 8;
             int32_t b = (298 * c + 516 * d + 128) >> 8;
@@ -110,7 +108,7 @@ bool cura_camera_start(lv_obj_t *canvas, int w, int h)
 
     TDL_CAMERA_CFG_T cfg = {
         .fps          = 15,
-        .width        = CAM_NATIVE_W,   /* 640 — in GC2145 PPI table */
+        .width        = CAM_NATIVE_W,   /* 480 — in GC2145 PPI table */
         .height       = CAM_NATIVE_H,   /* 480 */
         .out_fmt      = TDL_CAMERA_FMT_YUV422,
         .get_frame_cb = _frame_cb,
