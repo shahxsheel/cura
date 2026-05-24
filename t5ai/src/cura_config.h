@@ -8,11 +8,11 @@
  */
 
 /* Wi-Fi credentials */
-#define CURA_WIFI_SSID      "JJ Lake"
-#define CURA_WIFI_PASSWORD  "20220315"
+#define CURA_WIFI_SSID      "Verizon-RC400L-90"
+#define CURA_WIFI_PASSWORD  "3cd7e2cd"
 
 /* Laptop FastAPI server */
-#define CURA_SERVER_HOST    "192.168.34.151"
+#define CURA_SERVER_HOST    "192.168.1.110"
 #define CURA_SERVER_PORT    8000
 
 /* Polling interval in milliseconds */
@@ -24,3 +24,6 @@
 /* Display dimensions (T5AI 3.5" portrait) */
 #define CURA_DISPLAY_W  320
 #define CURA_DISPLAY_H  480
+
+/* MJPEG HTTP stream port (http://<board-ip>:8081/) */
+#define CURA_STREAM_PORT    8081

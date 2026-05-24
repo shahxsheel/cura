@@ -26,6 +26,7 @@
 
 #include "cura_config.h"
 #include "cura_http.h"
+#include "cura_stream.h"
 #include "cura_ui.h"
 #include "tdl_camera_manage.h"
 
@@ -168,7 +169,10 @@ static void user_main(void)
     /* 6. Wi-Fi (blocks until IP obtained) */
     _wifi_connect();
 
-    /* 7. Poll task */
+    /* 7. MJPEG stream server (needs IP — start after WiFi up) */
+    cura_stream_start();
+
+    /* 8. Poll task */
     THREAD_HANDLE poll_thread = NULL;
     THREAD_CFG_T cfg = {0};
     cfg.priority   = THREAD_PRIO_2;

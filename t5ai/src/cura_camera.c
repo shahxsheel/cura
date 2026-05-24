@@ -1,4 +1,5 @@
 #include "cura_camera.h"
+#include "cura_stream.h"
 #include "tal_api.h"
 #include <string.h>
 #include <stdint.h>
@@ -30,10 +31,19 @@ static void _refresh(void *arg)
     }
 }
 
-/* Camera native resolution — 640×480 is in the GC2145 PPI table; 320×240 is not.
-   We request 640×480 and 2:1 downsample to the 320×240 canvas on the fly. */
-#define CAM_NATIVE_W 640
-#define CAM_NATIVE_H 480
+/* GC2145 capture: 240x240 is the smallest supported PPI and keeps camera buffers small.
+ * The preview scales the full square frame into the LVGL canvas and rotates it
+ * for portrait board orientation. */
+#define CAM_NATIVE_W  240
+#define CAM_NATIVE_H  240
+
+static OPERATE_RET _jpeg_frame_cb(TDL_CAMERA_HANDLE_T hdl, TDL_CAMERA_FRAME_T *frame)
+{
+    (void)hdl;
+    if (!frame || !frame->data || frame->data_len == 0) return OPRT_OK;
+    cura_stream_push_jpeg(frame->data, frame->data_len);
+    return OPRT_OK;
+}
 
 static OPERATE_RET _frame_cb(TDL_CAMERA_HANDLE_T hdl, TDL_CAMERA_FRAME_T *frame)
 {
@@ -42,26 +52,32 @@ static OPERATE_RET _frame_cb(TDL_CAMERA_HANDLE_T hdl, TDL_CAMERA_FRAME_T *frame)
         return OPRT_OK;
     }
 
-    /* 2:1 nearest-neighbour downsample: sample every other column and row.
-     * YUYV layout: 4 bytes = [Y0, U, Y1, V] for two adjacent pixels.
-     * For output pixel (x_out, y_out) we sample source pixel (x_out*2, y_out*2).
-     * Source column x_out*2 is the Y0 byte of YUYV group x_out in row (y_out*2).
-     * Row stride = CAM_NATIVE_W * 2 bytes (2 bytes/pixel in packed YUYV). */
-    const uint8_t *base = frame->data;
-    const int      stride = CAM_NATIVE_W * 2;   /* bytes per source row */
+    /* Convert 240×240 YUYV → 320×240 RGB565 with 90° CW rotation.
+     *
+     * Byte order confirmed by tkl_dvp.c (YUV_FORMAT_YUYV) and tkl_dma2d.c
+     * (DMA2D_INPUT_YUYV): memory layout is [Y0, U, Y1, V] per 4-byte group.
+     *
+     * 90° CW rotation: dst(xo, yo) ← src_col = 239-yo, src_row = xo*240/320.
+     * Since src is square (240×240) and s_h==240, src_col = 239-yo (no divide).
+     * src_row = xo*240/320 = (xo*3)>>2 (multiply+shift, avoids divide).
+     *
+     * BT.601 limited-range YCbCr→RGB same as TuyaOpen tal_image_yuv422_to_rgb.c. */
+    const uint8_t *base   = frame->data;
+    const int      stride = CAM_NATIVE_W * 2;  /* 480 bytes/row */
 
     for (int yo = 0; yo < s_h; yo++) {
-        const uint8_t *row = base + (size_t)(yo * 2) * stride;
-        uint16_t      *dst = s_buf + (size_t)yo * s_w;
+        uint16_t *dst = s_buf + (size_t)yo * s_w;
+        int src_col = CAM_NATIVE_W - 1 - yo;   /* 90° CW, no divide (square src) */
+        int grp     = src_col >> 1;             /* YUYV group index */
+        int y_off   = src_col & 1;             /* 0 → Y0=p[0], 1 → Y1=p[2] */
+
         for (int xo = 0; xo < s_w; xo++) {
-            /* DVP outputs UYVY: [U, Y0, V, Y1] per 4-byte group (confirmed by
-             * TuyaOpen tal_image_yuv422_to_rgb.c). Group xo covers source
-             * columns xo*2 and xo*2+1; we sample Y0 (even pixel). */
-            const uint8_t *p = row + (size_t)xo * 4;
-            int32_t d = (int32_t)p[0] - 128;   /* U = Cb */
-            int32_t c = (int32_t)p[1] - 16;    /* Y0, BT.601 offset */
-            int32_t e = (int32_t)p[2] - 128;   /* V = Cr */
-            /* BT.601 limited-range YCbCr → RGB (same as TuyaOpen reference) */
+            int src_row = (xo * 3) >> 2;       /* xo * 240/320, integer approx */
+            const uint8_t *p = base + (size_t)src_row * stride + grp * 4;
+            /* YUYV: p[0]=Y0, p[1]=U, p[2]=Y1, p[3]=V */
+            int32_t c = (int32_t)(y_off ? p[2] : p[0]) - 16;  /* Y, BT.601 offset */
+            int32_t d = (int32_t)p[1] - 128;                   /* U = Cb */
+            int32_t e = (int32_t)p[3] - 128;                   /* V = Cr */
             int32_t r = (298 * c + 409 * e + 128) >> 8;
             int32_t g = (298 * c - 100 * d - 208 * e + 128) >> 8;
             int32_t b = (298 * c + 516 * d + 128) >> 8;
@@ -109,11 +125,15 @@ bool cura_camera_start(lv_obj_t *canvas, int w, int h)
     lv_canvas_set_buffer(canvas, s_buf, w, h, LV_COLOR_FORMAT_RGB565);
 
     TDL_CAMERA_CFG_T cfg = {
-        .fps          = 15,
-        .width        = CAM_NATIVE_W,   /* 640 — in GC2145 PPI table */
-        .height       = CAM_NATIVE_H,   /* 480 */
-        .out_fmt      = TDL_CAMERA_FMT_YUV422,
-        .get_frame_cb = _frame_cb,
+        .fps                  = 15,
+        .width                = CAM_NATIVE_W,   /* 240 - in GC2145 PPI table */
+        .height               = CAM_NATIVE_H,   /* 240 */
+        .out_fmt              = TDL_CAMERA_FMT_JPEG_YUV422_BOTH,
+        .encoded_quality      = {
+            .jpeg_cfg = { .enable = 1, .max_size = 30, .min_size = 5 },
+        },
+        .get_frame_cb         = _frame_cb,
+        .get_encoded_frame_cb = _jpeg_frame_cb,
     };
 
     OPERATE_RET rt = tdl_camera_dev_open(s_hdl, &cfg);
