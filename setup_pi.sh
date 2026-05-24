@@ -31,6 +31,15 @@ echo "📦  Installing Python dependencies..."
 uv sync
 echo "✅  Dependencies installed"
 
+# mediapipe has no official ARM64 wheel — try PiWheels community build
+echo ""
+echo "📦  Trying mediapipe for ARM64 (community build via PiWheels)..."
+if uv pip install mediapipe --extra-index-url https://www.piwheels.org/simple 2>/dev/null; then
+    echo "✅  mediapipe installed"
+else
+    echo "⚠️   mediapipe not available for ARM64 — mouth tracking will be disabled"
+fi
+
 # ── 4. Orbbec udev rules ─────────────────────────────────────────────────────
 echo ""
 echo "🔧  Installing Orbbec USB device rules..."

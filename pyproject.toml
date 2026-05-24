@@ -9,7 +9,7 @@ dependencies = [
     "pyserial",
     "opencv-python",
     "pyorbbecsdk2; sys_platform == 'linux'",
-    "mediapipe",
+    "mediapipe; not (sys_platform == 'linux' and platform_machine == 'aarch64')",
     "ultralytics",
     "fastapi",
     "uvicorn[standard]",
