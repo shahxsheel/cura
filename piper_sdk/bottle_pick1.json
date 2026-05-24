@@ -1,0 +1,123 @@
+{
+  "name": "pick_bottle",
+  "created": "2026-05-23T19:13:54.125587",
+  "waypoints": [
+    {
+      "label": "home",
+      "joints": [
+        -1860,
+        -1572,
+        928,
+        -475,
+        22602,
+        -2331
+      ],
+      "gripper_angle": 0,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "pre-grasp",
+      "joints": [
+        1162,
+        107827,
+        -26297,
+        1834,
+        -74578,
+        -2112
+      ],
+      "gripper_angle": 100700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "grasp",
+      "joints": [
+        1162,
+        112575,
+        -25842,
+        4613,
+        -72965,
+        -5096
+      ],
+      "gripper_angle": 53800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover",
+      "joints": [
+        -3338,
+        73981,
+        -80698,
+        7354,
+        22682,
+        -9558
+      ],
+      "gripper_angle": 49800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "feed",
+      "joints": [
+        -1955,
+        142418,
+        -140991,
+        7205,
+        10363,
+        -10230
+      ],
+      "gripper_angle": 49400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "wtf",
+      "joints": [
+        -2113,
+        132835,
+        -141021,
+        2477,
+        56842,
+        -7536
+      ],
+      "gripper_angle": 49800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "end",
+      "joints": [
+        1193,
+        108164,
+        -29121,
+        5355,
+        -61603,
+        -5260
+      ],
+      "gripper_angle": 53100,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "letgo",
+      "joints": [
+        1193,
+        108164,
+        -29121,
+        4849,
+        -62898,
+        -5134
+      ],
+      "gripper_angle": 100800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "finish",
+      "joints": [
+        1325,
+        -1412,
+        1073,
+        -1577,
+        25130,
+        2017
+      ],
+      "gripper_angle": 2300,
+      "gripper_effort": 1000
+    }
+  ]
+}

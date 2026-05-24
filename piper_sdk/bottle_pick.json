@@ -1,0 +1,84 @@
+{
+  "name": "pick_bottle",
+  "created": "2026-05-23T18:58:51.754866",
+  "waypoints": [
+    {
+      "label": "home",
+      "joints": [
+        165,
+        -1738,
+        1870,
+        6846,
+        4986,
+        -8239
+      ],
+      "gripper_angle": -200,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "pre_grasp",
+      "joints": [
+        -207,
+        113609,
+        -30506,
+        1379,
+        -74681,
+        -791
+      ],
+      "gripper_angle": 76900,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "grasp",
+      "joints": [
+        -207,
+        113609,
+        -30506,
+        2245,
+        -74327,
+        -660
+      ],
+      "gripper_angle": 56700,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "hover",
+      "joints": [
+        44704,
+        75719,
+        -75584,
+        6950,
+        2887,
+        -660
+      ],
+      "gripper_angle": 56400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "putdown",
+      "joints": [
+        38446,
+        131445,
+        -65650,
+        12949,
+        -64107,
+        -9808
+      ],
+      "gripper_angle": 56400,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "home",
+      "joints": [
+        165,
+        -1738,
+        1870,
+        6846,
+        4986,
+        -8239
+      ],
+      "gripper_angle": -200,
+      "gripper_effort": 1000
+    }
+  ]
+}
