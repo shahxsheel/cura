@@ -1,0 +1,110 @@
+{
+  "name": "task",
+  "created": "2026-05-24T15:21:07.163057",
+  "waypoints": [
+    {
+      "label": "1",
+      "joints": [
+        172,
+        10056,
+        -10841,
+        -506,
+        8510,
+        1694
+      ],
+      "gripper_angle": 50200,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "2",
+      "joints": [
+        0,
+        71724,
+        -74312,
+        3985,
+        5433,
+        1909
+      ],
+      "gripper_angle": 50200,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "3",
+      "joints": [
+        0,
+        71505,
+        -74312,
+        3773,
+        5262,
+        1792
+      ],
+      "gripper_angle": 100800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "5",
+      "joints": [
+        -681,
+        77340,
+        -39395,
+        3980,
+        -26922,
+        -2537
+      ],
+      "gripper_angle": 100800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "6",
+      "joints": [
+        -463,
+        108152,
+        -26465,
+        2271,
+        -74255,
+        0
+      ],
+      "gripper_angle": 100800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "7",
+      "joints": [
+        -463,
+        108152,
+        -26465,
+        2146,
+        -74372,
+        0
+      ],
+      "gripper_angle": 49800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "8",
+      "joints": [
+        -463,
+        77355,
+        -70271,
+        1391,
+        4244,
+        -2868
+      ],
+      "gripper_angle": 49800,
+      "gripper_effort": 1000
+    },
+    {
+      "label": "9",
+      "joints": [
+        -1333,
+        120427,
+        -111375,
+        1909,
+        0,
+        -2525
+      ],
+      "gripper_angle": 49400,
+      "gripper_effort": 1000
+    }
+  ]
+}

@@ -4,8 +4,7 @@ mac_vision.py — Cura vision client (runs on Mac)
 
 Usage:
     python3 mac_vision.py --adjust-box      # live box position adjustment
-    python3 mac_vision.py --calibrate       # 4-corner homography calibration
-    python3 mac_vision.py --calibrate-z     # Z depth calibration from face size
+    python3 mac_vision.py --calibrate       # 4-point homography calibration
     python3 mac_vision.py --track-hand      # hand tracking prototype (landmark 9)
     python3 mac_vision.py --track-mouth     # mouth tracking for real demo
 """
@@ -15,6 +14,7 @@ import os
 import socket
 import sys
 import threading
+import time
 
 import cv2
 import mediapipe as mp
@@ -31,9 +31,19 @@ ARM_POS_PORT = 9998   # Pi streams arm position TO Mac on this port
 CMD_PORT = 9999       # Mac sends arm move commands TO Pi on this port
 BOX_X1, BOX_Y1 = 510, 350
 BOX_X2, BOX_Y2 = 1370, 1050
-FALLBACK_Z = 350000          # 350mm in 0.001mm units
+HARDCODED_ARM_X = int(os.environ.get("CURA_ARM_X_MM", "400")) * 1000  # forward distance, fixed
 KNOWN_FACE_WIDTH_MM = 150    # average adult face width at cheekbones
-SEND_THRESHOLD = 2000        # minimum change in 0.001mm before re-sending
+SEND_THRESHOLD = 20000       # minimum change in 0.001mm before re-sending (20mm)
+MIN_SEND_INTERVAL_S = 0.8    # rate-limit command sends — at most once every 0.8s
+
+# Preset (Y, Z) targets (in mm) for auto-calibration. Spread in a rectangle.
+CALIB_POINTS_YZ_MM = [
+    (-120, 200),   # bottom-left
+    ( 120, 200),   # bottom-right
+    (-120, 400),   # top-left
+    ( 120, 400),   # top-right
+]
+CALIB_SETTLE_S = 3.5         # seconds to wait after each move before prompting click
 ARM_RY_DELIVERY = 85000      # 85 degree tilt for delivery (0.001 degree units)
 
 CALIBRATION_FILE = "calibration.json"
@@ -136,10 +146,17 @@ def save_calibration(data):
 
 
 def open_webcam():
-    cap = cv2.VideoCapture(0)
+    index = int(os.environ.get("CURA_CAM_INDEX", "0"))
+    cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
     if not cap.isOpened():
-        print("ERROR: Could not open webcam.")
+        cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        print(f"ERROR: Could not open webcam at index {index}.")
+        print("Try: CURA_CAM_INDEX=1 python3 mac_vision.py ...")
         sys.exit(1)
+    # warm up — first few frames on Mac are often empty
+    for _ in range(5):
+        cap.read()
     return cap
 
 
@@ -223,183 +240,119 @@ def adjust_box():
 # ---------------------------------------------------------------------------
 
 def calibrate():
-    corners = [
-        ("TL", (BOX_X1, BOX_Y1)),
-        ("TR", (BOX_X2, BOX_Y1)),
-        ("BL", (BOX_X1, BOX_Y2)),
-        ("BR", (BOX_X2, BOX_Y2)),
-    ]
-    corner_names = ["TOP-LEFT", "TOP-RIGHT", "BOTTOM-LEFT", "BOTTOM-RIGHT"]
+    """Manual-drag homography calibration.
 
-    # Start arm position listener — Pi streams live position to us
+    Pi (run with --calibrate) puts the arm in drag-teach and streams its
+    live end-pose to Mac:9998. You physically move the arm to 4 spread
+    positions; at each one, click the claw tip in the camera window. The
+    Mac captures (pixel, live arm Y, live arm Z) for each click.
+    """
+    print("\n=== Manual-Drag 4-Point Calibration ===")
+    print("On the Pi (separate terminal):  python3 pi_arm_server.py --calibrate")
+    print("Arm should go limp (drag-teach). Move it to 4 well-spread positions.")
+    print(f"Forward distance is fixed at X = {HARDCODED_ARM_X//1000} mm — try to")
+    print("keep the claw roughly at that depth for each point.\n")
+
+    # Open pose-stream listener (Pi connects in as client).
     pos_srv, pos_conn = start_arm_pos_listener()
 
-    print("\n=== 4-Corner Homography Calibration ===")
-    print("Jog the arm claw tip to align with each highlighted corner dot on screen.")
-    print("Press SPACE to record each corner.\n")
-
     cap = open_webcam()
-    arm_points = []
-    step = 0
+    pixel_points = []
+    arm_points_yz_mm = []
+
+    click_state = {"pt": None}
+
+    def _on_click(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            click_state["pt"] = (x, y)
+
+    cv2.namedWindow("Cura Calibration")
+    cv2.setMouseCallback("Cura Calibration", _on_click)
 
     try:
+        step = 0
         while step < 4:
             ret, frame = cap.read()
             if not ret:
                 continue
-
             draw_box(frame)
 
-            # Draw all corner dots — dim ones already done, bright current target
-            for i, (label, (cx, cy)) in enumerate(corners):
-                if i < step:
-                    # already recorded — green check
-                    cv2.circle(frame, (cx, cy), 8, (0, 200, 0), -1)
-                    cv2.putText(frame, f"{label} ✓", (cx + 10, cy - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
-                elif i == step:
-                    # current target — flashing yellow, larger
-                    cv2.circle(frame, (cx, cy), 14, (0, 255, 255), 3)
-                    cv2.circle(frame, (cx, cy), 5, (0, 255, 255), -1)
-                    cv2.putText(frame, f"{label} <- AIM HERE", (cx + 10, cy - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-                else:
-                    # upcoming — grey
-                    cv2.circle(frame, (cx, cy), 8, (120, 120, 120), -1)
-                    cv2.putText(frame, label, (cx + 10, cy - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (120, 120, 120), 1)
+            for i, (px, py) in enumerate(pixel_points):
+                cv2.circle(frame, (px, py), 8, (0, 200, 0), -1)
+                yy, zz = arm_points_yz_mm[i]
+                cv2.putText(frame, f"{i+1}: Y={yy:.0f} Z={zz:.0f}mm",
+                            (px + 10, py - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, (0, 200, 0), 1)
 
-            # Show current arm position live on frame
             ax, ay, az = get_arm_pos()
-            if ax is not None:
-                pos_text = f"Arm: X={ax}  Y={ay}  Z={az}"
-                cv2.putText(frame, pos_text, (10, frame.shape[0] - 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            if ax is None:
+                pose_txt = "Waiting for Pi pose stream on :9998 ..."
+                pose_color = (0, 0, 255)
+            else:
+                pose_txt = (f"LIVE: X={ax/1000:.1f}  Y={ay/1000:.1f}  Z={az/1000:.1f} mm")
+                pose_color = (255, 255, 0)
+            cv2.putText(frame, pose_txt, (10, frame.shape[0] - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, pose_color, 2)
 
-            # Instruction overlay
             cv2.putText(frame,
-                        f"[{step+1}/4] Align claw with {corner_names[step]} dot. SPACE=record  Q=cancel",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+                        f"[{step+1}/4] Drag arm to a spot, CLICK claw tip. Q=cancel",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
             cv2.imshow("Cura Calibration", frame)
             key = cv2.waitKey(1) & 0xFF
-
-            if key == ord(' '):
-                ax, ay, az = get_arm_pos()
-                if ax is None:
-                    print("No arm position yet — is Pi running pi_arm_server.py --calibrate?")
-                    continue
-                label, pixel = corners[step]
-                arm_points.append([ax, ay])
-                print(f"  Recorded {label}: pixel={pixel}, arm=({ax}, {ay})")
-                step += 1
-            elif key == ord('q'):
+            if key == ord('q'):
                 print("Calibration cancelled.")
                 return
+
+            if click_state["pt"] is not None:
+                ax, ay, az = get_arm_pos()
+                if ay is None or az is None:
+                    print("  ⚠️ No arm pose yet — is the Pi running --calibrate?")
+                    click_state["pt"] = None
+                    continue
+                px, py = click_state["pt"]
+                click_state["pt"] = None
+                y_mm = ay / 1000.0
+                z_mm = az / 1000.0
+                pixel_points.append((px, py))
+                arm_points_yz_mm.append((y_mm, z_mm))
+                print(f"  ▶ [{step+1}/4]  pixel=({px}, {py})  "
+                      f"arm=Y={y_mm:.1f}mm Z={z_mm:.1f}mm  (live X={ax/1000:.1f}mm)")
+                step += 1
     finally:
         cap.release()
         cv2.destroyAllWindows()
-        pos_conn.close()
-        pos_srv.close()
+        try: pos_conn.close()
+        except Exception: pass
+        try: pos_srv.close()
+        except Exception: pass
 
-    if len(arm_points) < 4:
+    if len(pixel_points) < 4:
         print("Calibration incomplete.")
         return
 
-    print("\nAll 4 corners recorded. Computing homography...")
-    image_points = np.array(
-        [[BOX_X1, BOX_Y1], [BOX_X2, BOX_Y1], [BOX_X1, BOX_Y2], [BOX_X2, BOX_Y2]],
-        dtype=np.float32,
-    )
-    arm_pts = np.array(arm_points, dtype=np.float32)
-    H, _ = cv2.findHomography(image_points, arm_pts)
+    # Homography maps pixels -> (arm Y, arm Z) in 0.001mm units (Pi expects).
+    image_pts = np.array(pixel_points, dtype=np.float32)
+    arm_pts = np.array([[y * 1000.0, z * 1000.0] for y, z in arm_points_yz_mm],
+                       dtype=np.float32)
+    H, _ = cv2.findHomography(image_pts, arm_pts)
+    if H is None:
+        print("Homography failed — points may be collinear. Try again.")
+        return
+
+    print("\n=== Summary ===")
+    for i, ((px, py), (y, z)) in enumerate(zip(pixel_points, arm_points_yz_mm)):
+        print(f"  [{i+1}] pixel=({px}, {py})  arm=Y={y:.1f}mm Z={z:.1f}mm")
+    print(f"\nHomography:\n{H}")
 
     data = {
         "H": H.tolist(),
-        "box": [BOX_X1, BOX_Y1, BOX_X2, BOX_Y2],
-        "focal_length_px": None,
-        "reference_face_width_px": None,
-        "reference_z_mm": None,
+        "pixel_points": pixel_points,
+        "arm_points_yz_mm": arm_points_yz_mm,
+        "hardcoded_arm_x_mm": HARDCODED_ARM_X // 1000,
     }
     save_calibration(data)
-
-
-# ---------------------------------------------------------------------------
-# Mode B — Z calibration
-# ---------------------------------------------------------------------------
-
-def calibrate_z():
-    cal = load_calibration()
-    cap = open_webcam()
-
-    face_width_px = None
-    _latest_face_width = [None]
-
-    base_opts = mp_python.BaseOptions(model_asset_path=_download_model("face_landmarker"))
-    opts = mp_vision.FaceLandmarkerOptions(
-        base_options=base_opts,
-        running_mode=RunningMode.VIDEO,
-        num_faces=1,
-    )
-    detector = mp_vision.FaceLandmarker.create_from_options(opts)
-
-    print("\n=== Z Depth Calibration ===")
-    print("Have the patient sit at the EXACT delivery position.")
-    print("Press SPACE when ready.")
-
-    try:
-        ts = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                continue
-
-            h, w = frame.shape[:2]
-            ts += 33
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
-                              data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            result = detector.detect_for_video(mp_img, ts)
-
-            if result.face_landmarks:
-                fl = result.face_landmarks[0]
-                lm234 = fl[234]; lm454 = fl[454]
-                fw = abs(lm234.x - lm454.x) * w
-                _latest_face_width[0] = fw
-                cv2.putText(frame, f"Face width: {fw:.0f}px", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
-
-            cv2.putText(frame, "Press SPACE to capture Z reference", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.imshow("Cura Z Calibration", frame)
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord(' '):
-                fw = _latest_face_width[0]
-                if fw is None or fw < 10:
-                    print("No face detected — make sure patient is visible.")
-                    continue
-                cv2.destroyAllWindows()
-                cap.release()
-                try:
-                    z_mm = float(input("\nEnter measured Z distance from arm base to mouth in mm: "))
-                except ValueError:
-                    print("Invalid input.")
-                    return
-                focal_length_px = fw * z_mm / KNOWN_FACE_WIDTH_MM
-                cal["focal_length_px"] = focal_length_px
-                cal["reference_face_width_px"] = fw
-                cal["reference_z_mm"] = z_mm
-                save_calibration(cal)
-                print(f"Z calibration saved. Reference face width: {fw:.0f}px at Z={z_mm}mm")
-                return
-            elif key == ord('q'):
-                print("Z calibration cancelled.")
-                break
-    finally:
-        if cap.isOpened():
-            cap.release()
-        cv2.destroyAllWindows()
-        detector.close()
+    print(f"\nSaved to {CALIBRATION_FILE}.")
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +378,7 @@ def track_hand():
 
     conn = None
     last_x, last_y = None, None
+    last_send_t = 0.0
     ts = 0
 
     try:
@@ -455,24 +409,27 @@ def track_hand():
                 py = int(lm9.y * h)
                 cv2.circle(frame, (px, py), 10, (255, 255, 0), -1)
 
-                if BOX_X1 <= px <= BOX_X2 and BOX_Y1 <= py <= BOX_Y2:
-                    arm_x, arm_y = pixel_to_arm(px, py, H)
-                    arm_z = FALLBACK_Z
+                if True:
+                    arm_y, arm_z = pixel_to_arm(px, py, H)
+                    arm_x = HARDCODED_ARM_X
 
+                    now = time.time()
                     changed = (
                         last_x is None
-                        or abs(arm_x - last_x) > SEND_THRESHOLD
-                        or abs(arm_y - last_y) > SEND_THRESHOLD
+                        or abs(arm_y - last_x) > SEND_THRESHOLD
+                        or abs(arm_z - last_y) > SEND_THRESHOLD
                     )
+                    rate_ok = (now - last_send_t) >= MIN_SEND_INTERVAL_S
 
-                    if changed:
+                    if changed and rate_ok:
                         cmd = {
                             "x": arm_x, "y": arm_y, "z": arm_z,
                             "rx": 0, "ry": ARM_RY_DELIVERY, "rz": 0,
                         }
                         try:
                             conn.sendall((json.dumps(cmd) + "\n").encode())
-                            last_x, last_y = arm_x, arm_y
+                            last_x, last_y = arm_y, arm_z
+                            last_send_t = now
                         except (BrokenPipeError, OSError) as e:
                             print(f"TCP error: {e}. Waiting for reconnect...")
                             conn.close()
@@ -480,7 +437,7 @@ def track_hand():
                             last_x, last_y = None, None
 
                     cv2.putText(frame,
-                        f"ARM: X={arm_x//1000}mm Y={arm_y//1000}mm Z={arm_z//1000}mm",
+                        f"ARM: X={arm_x//1000}mm (fixed) Y={arm_y//1000}mm Z={arm_z//1000}mm",
                         (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1)
 
             cv2.imshow("Cura Vision", frame)
@@ -516,6 +473,7 @@ def track_mouth():
 
     conn = None
     last_x, last_y = None, None
+    last_send_t = 0.0
     ts = 0
 
     try:
@@ -542,31 +500,27 @@ def track_mouth():
                 py = int((lm13.y + lm14.y) / 2 * h)
                 cv2.circle(frame, (px, py), 10, (255, 0, 255), -1)
 
-                lm234 = fl[234]; lm454 = fl[454]
-                face_width_px = abs(lm234.x - lm454.x) * w
-                if cal.get("focal_length_px") and face_width_px > 10:
-                    z_mm = (KNOWN_FACE_WIDTH_MM * cal["focal_length_px"]) / face_width_px
-                    arm_z = int(z_mm * 1000)
-                else:
-                    arm_z = FALLBACK_Z
+                if True:
+                    arm_y, arm_z = pixel_to_arm(px, py, H)
+                    arm_x = HARDCODED_ARM_X
 
-                if BOX_X1 <= px <= BOX_X2 and BOX_Y1 <= py <= BOX_Y2:
-                    arm_x, arm_y = pixel_to_arm(px, py, H)
-
+                    now = time.time()
                     changed = (
                         last_x is None
-                        or abs(arm_x - last_x) > SEND_THRESHOLD
-                        or abs(arm_y - last_y) > SEND_THRESHOLD
+                        or abs(arm_y - last_x) > SEND_THRESHOLD
+                        or abs(arm_z - last_y) > SEND_THRESHOLD
                     )
+                    rate_ok = (now - last_send_t) >= MIN_SEND_INTERVAL_S
 
-                    if changed:
+                    if changed and rate_ok:
                         cmd = {
                             "x": arm_x, "y": arm_y, "z": arm_z,
                             "rx": 0, "ry": ARM_RY_DELIVERY, "rz": 0,
                         }
                         try:
                             conn.sendall((json.dumps(cmd) + "\n").encode())
-                            last_x, last_y = arm_x, arm_y
+                            last_x, last_y = arm_y, arm_z
+                            last_send_t = now
                         except (BrokenPipeError, OSError) as e:
                             print(f"TCP error: {e}. Waiting for reconnect...")
                             conn.close()
@@ -574,7 +528,7 @@ def track_mouth():
                             last_x, last_y = None, None
 
                     cv2.putText(frame,
-                        f"ARM: X={arm_x//1000}mm Y={arm_y//1000}mm Z={arm_z//1000}mm",
+                        f"ARM: X={arm_x//1000}mm (fixed) Y={arm_y//1000}mm Z={arm_z//1000}mm",
                         (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 1)
 
             cv2.imshow("Cura Vision", frame)
@@ -598,7 +552,6 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--adjust-box", action="store_true")
     group.add_argument("--calibrate", action="store_true")
-    group.add_argument("--calibrate-z", action="store_true")
     group.add_argument("--track-hand", action="store_true")
     group.add_argument("--track-mouth", action="store_true")
     args = parser.parse_args()
@@ -607,8 +560,6 @@ def main():
         adjust_box()
     elif args.calibrate:
         calibrate()
-    elif args.calibrate_z:
-        calibrate_z()
     elif args.track_hand:
         track_hand()
     elif args.track_mouth:
