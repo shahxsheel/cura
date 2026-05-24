@@ -30,7 +30,7 @@ The full system can:
 
 ---
 
-## Member A — ML / Vision Lead
+## Member A — ML / Vision Lead (name : Dan)
 
 **Files owned:** `src/cura/vision/` (all files), `tests/test_vision.py`
 
@@ -139,7 +139,7 @@ CURA_ARM_SPEED=30 CURA_WAYPOINTS_FILE=waypoints.json uv run python -m cura.main
 
 ---
 
-## Member D — Vibe Coder 2 (T5AI + Interface)
+## Member D — Vibe Coder 2 (T5AI + Interface) (name : Aadi)
 
 **Files owned:** `src/cura/interface/` (all files), `t5ai/` (TuyaOpen firmware)
 
@@ -187,7 +187,7 @@ curl http://localhost:8000/status
 
 ---
 
-## Member E — Vibe Coder 3 (Frontend + Demo + 3D Print)
+## Member E — Vibe Coder 3 (Frontend + Demo + 3D Print) (name: Anurag)
 
 **Files owned:** Web dashboard (Lovable, separate repo), `prints/`, pitch deck
 
